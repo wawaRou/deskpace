@@ -503,7 +503,8 @@ private final class MotionProbe {
         catch { fputs("\(error)\n", stderr); exit(1) }
         if CommandLine.arguments.contains("--offline") { return }
 
-        guard NSRunningApplication.runningApplications(withBundleIdentifier: "dev.switchdesktop.prototype").isEmpty else {
+        let appIDs = ["dev.wawarou.deskpace", "dev.switchdesktop.prototype"]
+        guard appIDs.allSatisfy({ NSRunningApplication.runningApplications(withBundleIdentifier: $0).isEmpty }) else {
             fputs("请先从菜单栏退出 DeskPace，避免重复处理同一手势。\n", stderr); exit(2)
         }
         let app = NSApplication.shared

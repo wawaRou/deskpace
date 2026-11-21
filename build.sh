@@ -6,7 +6,7 @@ stage=$(mktemp -d "$PWD/build/.compile.XXXXXX")
 trap 'rm -rf "$stage"' EXIT
 bundle="$stage/DeskPace.app"
 installed="$PWD/build/DeskPace.app"
-identity=${CODE_SIGN_IDENTITY:-$(git config --local --get switchdesktop.signingIdentity 2>/dev/null || true)}
+identity=${CODE_SIGN_IDENTITY:-$(git config --local --get deskpace.signingIdentity 2>/dev/null || git config --local --get switchdesktop.signingIdentity 2>/dev/null || true)}
 if [ -z "$identity" ]; then
     if [ -d "$installed" ] && ! codesign -dv "$installed" 2>&1 | grep -q '^Signature=adhoc$'; then
         printf '%s\n' '已有 App 使用固定签名，请先配置原签名身份。' >&2
@@ -49,7 +49,7 @@ fi
 cp Resources/Info.plist "$bundle/Contents/Info.plist"
 xcrun lipo -create "$stage/arm64" "$stage/x86_64" -output "$stage/DeskPace"
 mv "$stage/DeskPace" "$bundle/Contents/MacOS/DeskPace"
-codesign --force --sign "$identity" --identifier dev.switchdesktop.prototype "$bundle"
+codesign --force --sign "$identity" "$bundle"
 codesign --verify --deep --strict --all-architectures "$bundle"
 if [ -e "$installed" ]; then
     /usr/bin/swift -e '

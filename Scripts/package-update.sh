@@ -6,7 +6,8 @@ app="$PWD/build/DeskPace.app"
 info="$app/Contents/Info.plist"
 codesign --verify --deep --strict --all-architectures "$app"
 version=$(plutil -extract CFBundleShortVersionString raw "$info")
-account=$(plutil -extract CFBundleIdentifier raw "$info")
+# The original Sparkle key also verifies updates for existing installations.
+account=dev.switchdesktop.prototype
 feed=$(plutil -extract SUFeedURL raw "$info")
 repo=https://github.com/wawaRou/deskpace
 [ "$feed" = "$repo/releases/latest/download/appcast.xml" ] || { echo '更新源与发布仓库不一致' >&2; exit 1; }

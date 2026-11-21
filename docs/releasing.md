@@ -10,13 +10,17 @@ macOS 用 App 的代码签名识别辅助功能授权。Sparkle 用 App 内置�
 
 ```sh
 security find-identity -v -p codesigning
-git config --local switchdesktop.signingIdentity '替换为证书指纹'
+git config --local deskpace.signingIdentity '替换为证书指纹'
 ./build.sh
 ```
 
 `build.sh` 优先读取环境变量 `CODE_SIGN_IDENTITY`，其次读取上述 Git 配置。两者都为空时，使用临时签名。如果已有 App 带有固定签名而本次没有配置签名身份，脚本会停止构建，保留原有 App。指定的身份不可用时，构建失败，旧 App 仍可使用。更换签名团队或证书类型后，重新验证辅助功能授权。
 
-`switchdesktop.signingIdentity` 是项目前身沿用下来的配置名。App 的 Bundle ID 和 Sparkle 使用的钥匙串账户也沿用 `dev.switchdesktop.prototype`。
+App 的 Bundle ID 为 `dev.wawarou.deskpace`。从旧版迁移时，首次启动会读取旧版保存的倍率和语言。换用新 ID 后，需要为新版授予辅助功能权限，并在设置页核对「登录时启动」。
+
+Sparkle 的更新私钥仍保存在钥匙串账户 `dev.switchdesktop.prototype` 下，以便继续用原有密钥签署更新。已配置旧 Git 键 `switchdesktop.signingIdentity` 的仓库仍可使用原签名身份。
+
+本机调试也可以使用固定的自签代码签名证书。首次切换签名时，在「辅助功能」中授权一次。后续构建沿用同一张证书和 Bundle ID。公开发布前请单独选择发布用的签名身份，以免打包时沿用本机调试证书。
 
 ## 准备安装包
 

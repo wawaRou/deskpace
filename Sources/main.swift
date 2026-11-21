@@ -21,6 +21,11 @@ final class MenuModel: ObservableObject {
     private let preferences = UserDefaults.standard
 
     init() {
+        if let legacy = preferences.persistentDomain(forName: "dev.switchdesktop.prototype") {
+            for key in ["landingRate", "appLanguage"] where preferences.object(forKey: key) == nil {
+                if let value = legacy[key] { preferences.set(value, forKey: key) }
+            }
+        }
         language = preferences.string(forKey: "appLanguage").flatMap(AppLanguage.init(rawValue:)) ?? .preferred
         let saved = preferences.double(forKey: "landingRate")
         rate = saved.isFinite && Self.rates.contains(saved) ? saved : 1
