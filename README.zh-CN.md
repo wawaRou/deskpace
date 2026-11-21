@@ -32,9 +32,9 @@ DeskPace 是一款 macOS 菜单栏工具。四指切换桌面时，桌面照常�
 
 ## 更新
 
-更新包使用同一张证书签名，更新后辅助功能授权仍然有效。
+发布包使用固定的 Bundle ID 和签名证书。通过「检查更新…」安装更新后，macOS 通常会保留已授予的辅助功能权限。
 
-从 v0.1.6 或更早版本更新时，App 的身份会变化，需要再授权一次。如果系统设置里已启用 DeskPace，面板却仍在等待授权，请在辅助功能列表中用「−」移除所有 DeskPace 条目。然后再点一次面板里的授权按钮，重新开启 DeskPace。如果列表里没有重新出现 DeskPace，点「+」把它加回来。v0.1.6 之前的版本无法自动更新，请手动下载一次新版。
+如果面板一直显示等待授权，请在系统设置的权限列表中移除 DeskPace，再点面板里的「打开辅助功能设置…」重新启用。如果列表里没有 DeskPace，可点「+」选择 `/Applications/DeskPace.app`。
 
 ## 隐私
 
@@ -48,6 +48,6 @@ DeskPace 需要辅助功能权限，才能暂扣并调整四指横移的手势�
 
 ## 卸载
 
-在设置中关闭「登录时启动」，点面板里的「退出」，再把 DeskPace 移到废纸篓。然后在系统设置的辅助功能列表中移除 DeskPace。如需删除保存的设置，在终端运行 `defaults delete dev.wawarou.deskpace`。如果用过 v0.1.6 或更早版本，再运行 `defaults delete dev.switchdesktop.prototype`。
+在设置中关闭「登录时启动」，点面板里的「退出」，再把 DeskPace 移到废纸篓。然后在系统设置的辅助功能列表中移除 DeskPace。如需删除保存的设置，在终端运行 `defaults delete dev.wawarou.deskpace`。
 
 [反馈问题](https://github.com/wawaRou/deskpace/issues) · [源码构建与开发](CONTRIBUTING.md) · [MIT 许可证](LICENSE) · 更新功能使用 [Sparkle](https://sparkle-project.org)（MIT）

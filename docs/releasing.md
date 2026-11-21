@@ -14,19 +14,13 @@ git config --local deskpace.signingIdentity '替换为证书指纹'
 ./build.sh
 ```
 
-`build.sh` 优先读取环境变量 `CODE_SIGN_IDENTITY`，其次读取上述 Git 配置。两者都为空时，使用临时签名。如果 `build/DeskPace.app` 已带固定签名而本次没有配置签名身份，脚本会停止构建，保留原有 App。指定的身份不可用时，构建失败，旧 App 仍可使用。
+`build.sh` 优先读取环境变量 `CODE_SIGN_IDENTITY`，其次读取上述 Git 配置。两者都为空时，使用临时签名。如果 `build/DeskPace.app` 已带固定签名而本次没有配置签名身份，脚本会停止构建，保留原有 App。指定的签名身份不可用时，脚本会在替换 App 前退出。
 
 **备份证书。** 在「钥匙串访问」中把证书连同私钥导出为 `.p12`，用密码保护，存到发布机以外的地方。证书丢失后只能换一张新证书，所有用户更新后都要重新授权一次。打包脚本里固定写着发布证书的指纹，换证书时要同时修改它，并在 Release 说明中提醒用户重新授权。改用 Developer ID 还需要为所有组件加上 `--options runtime --timestamp` 签名，并在打包前完成公证。
 
 ## 本地构建与辅助功能授权
 
-临时签名的 App 每次重新构建后，原有授权都会失效。退出旧进程，打开 `build/DeskPace.app`，按面板提示授权。如果系统设置里的 DeskPace 已启用，面板仍在等待授权，移除旧条目，再添加刚构建的 App。配置了上面的固定证书后，重新构建不再需要授权。
-
-## 旧名称与迁移
-
-v0.1.6 及更早版本的 Bundle ID 为 `dev.switchdesktop.prototype`，并使用临时签名。新版首次启动时，会读取旧 ID 下保存的倍率和语言。这些用户更新后要为新 ID 重新授权，系统设置里可能还留着旧条目。两份 README 的「更新」一节写了处理办法。
-
-Sparkle 的更新私钥仍保存在钥匙串账户 `dev.switchdesktop.prototype` 下，以便继续用原有密钥签署更新。已配置旧 Git 键 `switchdesktop.signingIdentity` 的仓库仍可使用原签名身份。
+临时签名的 App 每次重新构建后，原有授权都会失效。从菜单栏退出 DeskPace，打开 `build/DeskPace.app`，按面板提示授权。如果系统设置里的 DeskPace 已启用，面板仍在等待授权，在权限列表中移除 DeskPace，再添加刚构建的 App。配置了上面的固定证书后，重新构建不再需要授权。
 
 ## 准备安装包
 
@@ -35,7 +29,7 @@ Sparkle 的更新私钥仍保存在钥匙串账户 `dev.switchdesktop.prototype`
 
 两个附件位于 `build/releases/v<版本号>/`，文件名是 `DeskPace-<版本号>.zip` 和 `appcast.xml`。签名后保留它们的名字和内容。脚本一次移入整个附件目录；同一版本已有目录时会停止，避免重新签名的 ZIP 和已上传的附件混用。[打包脚本](../Scripts/package-update.sh)
 
-普通源码构建只需仓库里的公钥。更换发布机时，安全迁移钥匙串里的更新私钥和签名证书，已安装的 App 才能继续验证新版并保留授权。更新私钥、证书私钥及 GitHub 凭据均应留在发布环境中。
+普通源码构建只需仓库里的更新公钥。更换发布机时，迁移代码签名证书及其私钥，并将 Sparkle 更新私钥导入钥匙串。更新私钥的账户名见[打包脚本](../Scripts/package-update.sh)中的 `account`。更新私钥、证书私钥及 GitHub 凭据均应留在发布环境中。
 
 ## 发布与验收
 
@@ -43,7 +37,7 @@ Sparkle 的更新私钥仍保存在钥匙串账户 `dev.switchdesktop.prototype`
 2. 上传 ZIP 和 `appcast.xml`，核对版本、文件名和大小。在 Release 说明中写明签名方式和是否需要重新授权，与两份 README 的「安装」「更新」两节保持一致。
 3. 发布正式 Release 并设为 **Latest**。App 从 Latest 获取清单，清单中的 ZIP 地址指向具体版本的标签。[App 使用的更新清单地址](https://github.com/wawaRou/deskpace/releases/latest/download/appcast.xml)
 4. 在未登录 GitHub 的会话中打开清单，下载它指向的 ZIP。这一步验证用户能匿名取得更新。
-5. 从上一公开版本用「检查更新…」实测一次更新。确认倍率仍在，并且是否需要重新授权与 Release 说明一致。
+5. 首次发布时，从下载的 ZIP 安装 App，确认可以授权并调节倍率。发布更新时，在已安装的 DeskPace 中点「检查更新…」，完成安装后核对版本号、保存的倍率和辅助功能权限。
 
 在终端也可以核对 Latest 对应的标签和附件名。
 

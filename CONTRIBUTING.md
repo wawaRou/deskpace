@@ -2,7 +2,7 @@
 
 ## 从源码运行
 
-在 Mac 上安装 Xcode Command Line Tools，使用支持 macOS 26 的 SDK。若 DeskPace 已经运行，先在菜单栏面板点「退出」。否则新构建不会接管手势：`open` 可能只是重新激活仍在运行的旧进程，从其他位置启动的新构建则会提示已有一份在运行，随即退出。然后在仓库根目录构建并打开 App。首次构建会从 GitHub 下载固定版本的 Sparkle，校验后缓存到 `.build/`。
+在 Mac 上安装 Xcode Command Line Tools，使用支持 macOS 26 的 SDK。若 DeskPace 已经运行，先在菜单栏面板点「退出」，再从仓库根目录构建并打开 App。这样可以确保手势由刚构建的 App 处理。首次构建会从 GitHub 下载固定版本的 Sparkle，校验后缓存到 `.build/`。
 
 ```sh
 ./build.sh
@@ -28,7 +28,7 @@ build/DeskPace.app/Contents/MacOS/DeskPace --trace
 | 读取显示器上的空间排列、当前空间和位置 | [NativeSpaces.swift](Sources/NativeSpaces.swift) |
 | 计算松手后每一帧的位移 | [TailCurve.swift](Sources/TailCurve.swift) |
 | 某块显示器失去位移反馈后，决定何时重试加速 | [DisplayFeedback.swift](Sources/DisplayFeedback.swift) |
-| 倍率、授权、登录项、更新和旧设置迁移 | [MenuModel.swift](Sources/App/MenuModel.swift) |
+| 倍率、语言、授权、登录项和更新 | [MenuModel.swift](Sources/App/MenuModel.swift) |
 | 菜单栏面板和设置窗口 | [Panels.swift](Sources/App/Panels.swift)、[main.swift](Sources/App/main.swift) |
 | 状态提示的文案。面板和窗口里的文字写在 Panels.swift、main.swift 中，每条都要同时写中英文 | [AppLanguage.swift](Sources/App/AppLanguage.swift) |
 
@@ -43,7 +43,7 @@ build/DeskPace.app/Contents/MacOS/DeskPace --trace
 ./build.sh
 ```
 
-修复手势问题时，选一个在旧实现上能失败的用例。改动事件顺序、桌面位置判断或动画倍率后，再用真机复测对应的操作。[测试命令与通过条件](docs/motion-verification.md)
+修复手势问题时，先用测试复现问题，再用同一个用例验证修复。改动事件顺序、桌面位置判断或动画倍率后，再用真机复测对应的操作。[测试命令与通过条件](docs/motion-verification.md)
 
 ## 文档放在哪里
 

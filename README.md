@@ -32,9 +32,9 @@ Open **Settings…** from the menu bar panel to:
 
 ## Update
 
-Updates are signed with the same certificate, so DeskPace keeps its Accessibility access.
+Release builds use the same bundle ID and signing certificate, so macOS normally keeps your Accessibility permission when you install an update through **Check for Updates…**.
 
-Updating from v0.1.6 or earlier changes the app's identity, so you need to grant access once more. If the panel keeps waiting although DeskPace is already turned on, remove every DeskPace entry from the Accessibility list with **−**. Then click the access button in the panel again and turn DeskPace on. If DeskPace doesn't reappear in the list, add it with **+**. Versions before v0.1.6 can't update themselves, so download the new version once by hand.
+If the panel keeps asking for access, remove DeskPace from the permissions list in System Settings. Click **Open Accessibility Settings…** in the panel and enable DeskPace again. If the app is missing from the list, click **+** and choose `/Applications/DeskPace.app`.
 
 ## Privacy
 
@@ -48,6 +48,6 @@ DeskPace needs Accessibility access to hold and adjust the events of horizontal 
 
 ## Uninstall
 
-In Settings, turn off **Launch at Login**. Click **Quit** in the panel and move DeskPace to the Trash. Then remove DeskPace from the Accessibility list in System Settings. To delete its saved settings, run `defaults delete dev.wawarou.deskpace` in Terminal. If you once used v0.1.6 or earlier, also run `defaults delete dev.switchdesktop.prototype`.
+In Settings, turn off **Launch at Login**. Click **Quit** in the panel and move DeskPace to the Trash. Then remove DeskPace from the Accessibility list in System Settings. To delete its saved settings, run `defaults delete dev.wawarou.deskpace` in Terminal.
 
 [Report an issue](https://github.com/wawaRou/deskpace/issues) · [Build and contribute (in Chinese)](CONTRIBUTING.md) · [MIT license](LICENSE) · Updates use [Sparkle](https://sparkle-project.org) (MIT)
