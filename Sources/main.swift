@@ -1,12 +1,14 @@
 import AppKit
 import ApplicationServices
 import SwiftUI
+import Sparkle
 
 final class MenuModel: ObservableObject {
     static let rates = 1.0...4.0
     @Published private(set) var rate: Double
     @Published var status = ""
     @Published private(set) var needsAccess = false
+    @Published private(set) var canCheckForUpdates = false
     let engine = SwipeEngine()
     private var permissionTimer: Timer?
     private let preferences = UserDefaults.standard
@@ -23,6 +25,11 @@ final class MenuModel: ObservableObject {
             setvbuf(stdout, nil, _IOLBF, 0)
             engine.trace = { print($0) }
         }
+    }
+
+    func observeUpdates(_ updater: SPUUpdater) {
+        updater.publisher(for: \.canCheckForUpdates)
+            .assign(to: &$canCheckForUpdates)
     }
 
     func setRate(_ newValue: Double) {
@@ -59,6 +66,7 @@ final class MenuModel: ObservableObject {
 
 struct SpeedPanel: View {
     @ObservedObject var model: MenuModel
+    let checkForUpdates: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -90,6 +98,7 @@ struct SpeedPanel: View {
             HStack {
                 Button("恢复原速") { model.setRate(1) }.disabled(model.rate == 1)
                 Spacer()
+                Button("检查更新…", action: checkForUpdates).disabled(!model.canCheckForUpdates)
                 Button("退出") { NSApp.terminate(nil) }
             }
         }
@@ -102,6 +111,8 @@ struct SpeedPanel: View {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let model = MenuModel()
     private let popover = NSPopover()
+    private let updates = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil,
+                                                       userDriverDelegate: nil)
     private var item: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -123,7 +134,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.action = #selector(togglePanel)
         }
         popover.behavior = .transient
-        popover.contentViewController = NSHostingController(rootView: SpeedPanel(model: model))
+        updates.startUpdater()
+        model.observeUpdates(updates.updater)
+        popover.contentViewController = NSHostingController(rootView: SpeedPanel(model: model) { [weak self] in
+            guard let self else { return }
+            popover.performClose(nil)
+            NSApp.activate()
+            updates.checkForUpdates(nil)
+        })
         model.refreshAccess()
         if CommandLine.arguments.contains("--show-panel") {
             DispatchQueue.main.async { self.togglePanel() }

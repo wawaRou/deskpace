@@ -8,8 +8,14 @@
     <key>CFBundleDisplayName</key><string>DeskPace</string>
     <key>CFBundleIconFile</key><string>AppIcon.icns</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.1.5</string>
-    <key>CFBundleVersion</key><string>6</string>
+    <key>CFBundleShortVersionString</key><string>0.1.6</string>
+    <key>CFBundleVersion</key><string>7</string>
+    <key>SUFeedURL</key><string>https://github.com/wawaRou/deskpace/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key><string>DM6KB+JUg3Wx/KXu/E2AmeF/P1jJh64/6iyCFDRZ5no=</string>
+    <key>SUVerifyUpdateBeforeExtraction</key><true/>
+    <key>SURequireSignedFeed</key><true/>
+    <key>SUEnableAutomaticChecks</key><false/>
+    <key>CFBundleAllowMixedLocalizations</key><true/>
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>

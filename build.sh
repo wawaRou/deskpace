@@ -16,9 +16,11 @@ if [ -z "$identity" ]; then
     printf '%s\n' '未配置固定签名身份，本次为临时签名。详见 README 的「更新时保留授权」。' >&2
 fi
 sdk=$(xcrun --sdk macosx --show-sdk-path)
+sparkle=$(Scripts/prepare-sparkle.sh)
 for arch in arm64 x86_64; do
     xcrun swiftc -O -whole-module-optimization -swift-version 5 \
-        -sdk "$sdk" -target "$arch-apple-macos26.0" Sources/*.swift -o "$stage/$arch"
+        -sdk "$sdk" -target "$arch-apple-macos26.0" -F "$sparkle" -framework Sparkle \
+        -Xlinker -rpath -Xlinker @executable_path/../Frameworks Sources/*.swift -o "$stage/$arch"
 done
 iconset="$stage/AppIcon.iconset"
 mkdir -p "$iconset"
@@ -34,11 +36,21 @@ done
 iconutil -c icns "$iconset" -o "$stage/AppIcon.icns"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
 cp "$stage/AppIcon.icns" Resources/logo-menubar.svg "$bundle/Contents/Resources/"
+framework="$bundle/Contents/Frameworks/Sparkle.framework"
+mkdir -p "$bundle/Contents/Frameworks"
+ditto "$sparkle/Sparkle.framework" "$framework"
+cp "$sparkle/LICENSE" "$bundle/Contents/Resources/Sparkle-LICENSE"
+if [ "$identity" != "-" ]; then
+    for component in "$framework"/Versions/B/XPCServices/*.xpc \
+                     "$framework/Versions/B/Autoupdate" "$framework/Versions/B/Updater.app" "$framework"; do
+        codesign --force --sign "$identity" --preserve-metadata=identifier,entitlements,flags "$component"
+    done
+fi
 cp Resources/Info.plist "$bundle/Contents/Info.plist"
 xcrun lipo -create "$stage/arm64" "$stage/x86_64" -output "$stage/DeskPace"
 mv "$stage/DeskPace" "$bundle/Contents/MacOS/DeskPace"
 codesign --force --sign "$identity" --identifier dev.switchdesktop.prototype "$bundle"
-codesign --verify --strict --all-architectures "$bundle"
+codesign --verify --deep --strict --all-architectures "$bundle"
 if [ -e "$installed" ]; then
     /usr/bin/swift -e '
         import Darwin

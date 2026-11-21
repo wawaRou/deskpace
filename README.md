@@ -24,6 +24,21 @@ git config --local switchdesktop.signingIdentity '替换为上一步所列证书
 
 GitHub Releases 分发可使用 `Developer ID Application` 身份签名并办理公证。构建环境也可以通过 `CODE_SIGN_IDENTITY` 指定证书。更换签名团队或证书类型时，应重新验证授权是否保留。[Apple 代码签名身份说明](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements)
 
+## 从 GitHub Releases 更新
+
+0.1.6 起，点开菜单栏倍率面板，选择「检查更新…」。发现新版后，Sparkle 会显示版本、下载更新包、校验签名，并在确认后安装和重启。检查由用户手动发起。0.1.5 及更早的版本需要手动安装一次带更新器的版本。
+
+更新清单地址是 `https://github.com/wawaRou/deskpace/releases/latest/download/appcast.xml`。桌面 App 匿名读取该地址。仓库为私有、尚无正式 Release，或最新 Release 缺少清单时，检查会提示更新源不可用。向普通用户开放更新前，需要让清单和 ZIP 可公开下载。
+
+### 准备更新包
+
+1. 递增 `Resources/Info.plist` 的 `CFBundleVersion`（Sparkle 用它比较版本），同时更新面向用户的 `CFBundleShortVersionString`。
+2. 运行 `./build.sh`。首次构建会下载指定版本的 Sparkle 并验证 SHA-256，后续复用本机缓存。若发布 Developer ID 公证版，请先完成签名、公证并把凭据附到 App 上。
+3. 运行 `Scripts/package-update.sh`。它从本机钥匙串读取项目专用的 EdDSA 签名身份（账户名与 Bundle ID 相同），核对 App 内置公钥，并在 `build/releases/v<版本号>/` 生成 `DeskPace-<版本号>.zip` 和已签名的 `appcast.xml`。
+4. 在 `wawaRou/deskpace` 创建与目录同名的标签（例如 `v0.1.6`）和 Release 草稿，原样上传这两个文件，然后发布并设为 Latest。清单中的 ZIP 链接固定到这个版本的标签。
+
+构建 App 只需要仓库里的公钥。发布机需要保管钥匙串里的私钥；换机时通过 Sparkle 的 `generate_keys` 安全迁移并备份，保持与已安装 App 中的公钥匹配。更新签名与上节的 macOS 代码签名身份分别管理。[Sparkle 官方发布文档](https://sparkle-project.org/documentation/publishing/)
+
 ## 真机结果
 
 以下数据来自 macOS 27.2.1 的内建屏。测试程序以相同的位移和松手速度切回同一个目标，并在真实桌面上逐帧读出位置。点击列记录目标窗口实际收到鼠标按下事件的时刻，包含每隔约 20 毫秒尝试一次点击的采样误差。
