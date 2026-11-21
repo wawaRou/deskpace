@@ -161,9 +161,15 @@ final class Playback {
     }
 }
 
+enum SwipeStatus {
+    case spacesUnavailable, needsAccess, tapUnavailable, ready, atEdge
+    case feedbackTimeout, playbackUnavailable, nativeRebound, landingUnconfirmed
+    case completed(rebound: Bool, rate: Double, milliseconds: Int)
+}
+
 final class SwipeEngine: NSObject {
     var rate = 1.0
-    var report: (String) -> Void = { _ in }
+    var report: (SwipeStatus) -> Void = { _ in }
     var trace: ((String) -> Void)?
     var observeFrameInterval: ((CFTimeInterval) -> Void)?
     private var feedback = DisplayFeedback()
@@ -183,8 +189,8 @@ final class SwipeEngine: NSObject {
     func start() {
         guard !isRunning else { return }
         stop()
-        guard spaces != nil, payload != nil else { report("此系统的桌面接口暂不可用"); return }
-        guard AXIsProcessTrusted() else { report("需要辅助功能权限"); return }
+        guard spaces != nil, payload != nil else { report(.spacesUnavailable); return }
+        guard AXIsProcessTrusted() else { report(.needsAccess); return }
         let mask = CGEventMask(1) << SwipeField.type.rawValue
         let callback: CGEventTapCallBack = { proxy, type, event, pointer in
             guard let pointer else { return Unmanaged.passUnretained(event) }
@@ -197,14 +203,14 @@ final class SwipeEngine: NSObject {
                                           options: .defaultTap, eventsOfInterest: mask,
                                           callback: callback, userInfo: Unmanaged.passUnretained(self).toOpaque()),
               let source = CFMachPortCreateRunLoopSource(nil, port, 0) else {
-            report("系统尚未允许调节手势")
+            report(.tapUnavailable)
             return
         }
         self.tap = port
         self.source = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: port, enable: true)
-        report("等待四指横移")
+        report(.ready)
     }
 
     func stop() {
@@ -343,7 +349,7 @@ final class SwipeEngine: NSObject {
             // At an outer edge macOS rubber-bands the current Space. Its
             // displacement does not follow the linear two-Space tracking scale.
             guard display.neighbor(in: originX) != nil else {
-                if abs(originX) > 1 { report("已到桌面边缘 · 系统原速回弹") }
+                if abs(originX) > 1 { report(.atEdge) }
                 return false
             }
             target = home
@@ -417,14 +423,14 @@ final class SwipeEngine: NSObject {
         case .unresponsive:
             feedback.missedFeedback(on: run.display.screenID)
             interrupt()
-            report("未收到桌面位移反馈，本次由系统收尾")
+            report(.feedbackTimeout)
             return
         }
         guard let next = playback.changed.copy(),
               payload?.update(next, phase: 2, progress: progress, delta: progress - playback.previous,
                               orientation: playback.orientation) == true else {
             interrupt()
-            report("当前系统未接受手势调速")
+            report(.playbackUnavailable)
             return
         }
         post(next)
@@ -471,7 +477,7 @@ final class SwipeEngine: NSObject {
             if playback == nil, run.movedAway,
                spaces?.isCurrent(run.display.spaces[run.display.origin], on: run.display) == true {
                 interrupt()
-                report("已回到原桌面 · 系统原速回弹")
+                report(.nativeRebound)
                 return
             }
         } else {
@@ -479,7 +485,7 @@ final class SwipeEngine: NSObject {
         }
         if elapsed > 1.8 {
             interrupt()
-            report("本次未确认到达目标桌面")
+            report(.landingUnconfirmed)
         }
     }
 
@@ -499,9 +505,7 @@ final class SwipeEngine: NSObject {
         }
         if let t90 = TailPoint.time(at: 0.90, in: run.samples) {
             let ms = Int((t90 * 1000).rounded())
-            let label = run.rate == 1 ? "系统原速" : "\(run.rate.formatted(.number.precision(.fractionLength(0...2))))×"
-            let action = run.kind == .rebound ? "回弹" : "切换"
-            report("上次\(action) \(label) · 走完 90% 位移用了 \(ms) 毫秒")
+            report(.completed(rebound: run.kind == .rebound, rate: run.rate, milliseconds: ms))
         }
         interrupt()
     }
