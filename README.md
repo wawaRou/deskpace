@@ -12,7 +12,7 @@ DeskPace 是一款 macOS 菜单栏工具，让你调快四指切换桌面时松�
 2. 点击菜单栏里的 DeskPace 图标，选择「授权辅助功能…」，在系统设置中允许 DeskPace 调节手势。
 3. 将滑块从 **1×（系统原速）** 调到想要的速度，最高 **4×**。下一次四指横移就会采用新倍率，设置会自动保存。
 
-仓库私有期间，请登录 GitHub 从 Releases 下载更新。仓库公开后，可直接在菜单栏面板点「检查更新…」。
+安装后，可在菜单栏面板点「检查更新…」获取新版。
 
 ## 从源码运行
 
@@ -23,4 +23,4 @@ DeskPace 是一款 macOS 菜单栏工具，让你调快四指切换桌面时松�
 open build/DeskPace.app
 ```
 
-[更新时保留授权](docs/releasing.md#本地构建与辅助功能授权) · [反馈问题](https://github.com/wawaRou/deskpace/issues)
+[更新时保留授权](docs/releasing.md#本地构建与辅助功能授权) · [反馈问题](https://github.com/wawaRou/deskpace/issues) · [MIT 许可证](LICENSE)
