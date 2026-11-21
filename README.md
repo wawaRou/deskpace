@@ -6,11 +6,23 @@
 
 运行 `./build.sh`，打开 `build/Switch Desktop.app`。点菜单栏里的双向箭头，再点「授权辅助功能…」，在系统弹出的隐私设置里允许 Switch Desktop。这台 macOS 27 上的权限页叫「设备控制和数据访问」。授权生效后，菜单会显示「等待四指横移」或上次切换的实测耗时。
 
-本地重新构建后，如果系统里的开关已打开，而菜单仍显示「等待辅助功能授权」，可以在权限列表中移除旧条目，再用添加按钮选择刚构建的 `build/Switch Desktop.app`。新版会自动检查权限并开始工作。
-
 滑块范围为 **1× 到 4×**，支持小数。倍率从下一次手势开始生效，并保存在这台 Mac 上。新安装默认 1×。「恢复原速」把滑块设回 1×，退出应用也会让 macOS 完全接管手势。
 
 四指接触触控板期间，桌面由系统跟手移动。松手后，快划切换、慢划切换、停住再松手，以及取消后滑回原桌面的动画，都使用滑块选定的倍率。菜单显示上次动作是切换还是回弹，以及走完剩余位移的 90% 所用时间。
+
+## 更新时保留授权
+
+macOS 根据代码签名识别已获授权的 App。默认的临时签名与单次构建绑定。想在这台 Mac 上保留授权，可以在 Xcode 的账户设置中创建 `Apple Development` 签名身份，然后在项目目录执行：
+
+```sh
+security find-identity -v -p codesigning
+git config --local switchdesktop.signingIdentity '替换为上一步所列证书的40位指纹'
+./build.sh
+```
+
+重新打开新版。从临时签名首次迁移时，需要为固定身份授权一次。如果旧条目已经开启，新版仍提示等待授权，请移除旧条目，再添加 `build/Switch Desktop.app`。此后运行同一份项目里的 `./build.sh` 会复用已选身份。固定身份不可用时，构建会报错，原 App 可以继续使用。
+
+GitHub Releases 分发可使用 `Developer ID Application` 身份签名并办理公证。构建环境也可以通过 `CODE_SIGN_IDENTITY` 指定证书。更换签名团队或证书类型时，应重新验证授权是否保留。[Apple 代码签名身份说明](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements)
 
 ## 真机结果
 
