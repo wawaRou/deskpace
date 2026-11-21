@@ -76,6 +76,8 @@ final class Playback {
     let end: CGEvent
     let kind: LandingKind
     let startProgress: Double
+    let startedAt = DispatchTime.now().uptimeNanoseconds
+    var forwardedProgress: Double
     let orientation: Double
     let curve: TailCurve
     private let trackingAgeAtLift: Double
@@ -97,6 +99,7 @@ final class Playback {
         self.changed = changed
         self.end = end
         self.startProgress = progress
+        forwardedProgress = progress
         trackingAgeAtLift = end.timestamp >= changed.timestamp
             ? Double(end.timestamp - changed.timestamp) * 1e-9 : 0
         targetAtStart = targetX
@@ -172,6 +175,7 @@ final class SwipeEngine: NSObject {
     private var gesture: Gesture?
     private var landing: Landing?
     private var playback: Playback?
+    private var queuedEnd: CGEvent?
     private var curves: [LandingKind: [CGDirectDisplayID: TailCurve]] = [:]
 
     var isRunning: Bool { tap.map(CGEvent.tapIsEnabled(tap:)) ?? false }
@@ -209,9 +213,16 @@ final class SwipeEngine: NSObject {
         if let tap { CFMachPortInvalidate(tap) }
         source = nil
         tap = nil
+        queuedEnd = nil
     }
 
     func interrupt(proxy: CGEventTapProxy? = nil) {
+        // A completed landing can also have its end waiting in the HID queue.
+        // Deliver it before the new begin and consume the queued copy on return.
+        if let proxy, let queuedEnd {
+            self.queuedEnd = nil
+            queuedEnd.tapPostEvent(proxy)
+        }
         releasePlayback(.interrupted, proxy: proxy)
         landing = nil
         gesture = nil
@@ -226,10 +237,11 @@ final class SwipeEngine: NSObject {
         // Consume the held end before posting so later callbacks cannot release it again.
         self.playback = nil
         let end = playback.end
-        if reason == .arrived || playback.previous != playback.startProgress {
-            _ = payload?.update(end, phase: UInt32(playback.kind.rawValue), progress: playback.previous,
+        if reason == .arrived || playback.forwardedProgress != playback.startProgress {
+            _ = payload?.update(end, phase: UInt32(playback.kind.rawValue), progress: playback.forwardedProgress,
                                 delta: 0, orientation: playback.orientation, keepVelocity: reason == .interrupted)
         }
+        if proxy == nil { queuedEnd = end }
         post(end, proxy: proxy)
     }
 
@@ -242,10 +254,23 @@ final class SwipeEngine: NSObject {
             return unchanged
         }
         guard type == SwipeField.type,
-              event.getIntegerValueField(.eventSourceUserData) != SwipeField.posted,
               event.getIntegerValueField(SwipeField.kind) == 23,
               event.getIntegerValueField(SwipeField.axis) == 1 else { return unchanged }
-        switch event.getIntegerValueField(SwipeField.phase) {
+        let phase = event.getIntegerValueField(SwipeField.phase)
+        if event.getIntegerValueField(.eventSourceUserData) == SwipeField.posted {
+            // Frame callbacks post through the HID queue. A physical begin can
+            // overtake a frame even after that callback has finished. Both the
+            // playback boundary and our event stamps use the same uptime clock.
+            if phase == 2 {
+                guard let playback, event.timestamp >= playback.startedAt else { return nil }
+                playback.forwardedProgress = event.getDoubleValueField(SwipeField.progress)
+            } else if phase == 4 || phase == 8 {
+                guard event.timestamp == queuedEnd?.timestamp else { return nil }
+                queuedEnd = nil
+            }
+            return unchanged
+        }
+        switch phase {
         case 1:
             let preceding = landing
             interrupt(proxy: proxy)

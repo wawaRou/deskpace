@@ -110,6 +110,10 @@ final class HandoffProbe {
     private(set) var remaining: Double?
     private var skipBelowGap: Double?
     private(set) var skippedUpdate = false
+    private var replayOnNextBegin = false
+    private var previousChange: CGEvent?
+    private var replayedTimestamp: CGEventTimestamp?
+    private var replayReachedDock = false
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
 
@@ -140,10 +144,27 @@ final class HandoffProbe {
         switch phase {
         case 1:
             events.append(.begin)
+            if replayOnNextBegin, let previousChange {
+                replayOnNextBegin = false
+                replayedTimestamp = previousChange.timestamp
+                previousChange.post(tap: .cghidEventTap)
+            }
         case 4, 8:
             events.append(posted ? .postedEnd(phase) : .nativeEnd(phase))
             if posted, let goal { remaining = spaces.offset(of: goal).map(abs) }
         case 2 where posted:
+            if event.timestamp == replayedTimestamp {
+                replayReachedDock = true
+                return false
+            }
+            if replayOnNextBegin {
+                previousChange = event.copy()
+            } else if let previousChange {
+                // Repeat after the new landing has started. Having an active
+                // playback alone cannot identify the owner of a queued frame.
+                self.previousChange = nil
+                previousChange.post(tap: .cghidEventTap)
+            }
             guard dropBelowGap != nil || skipBelowGap != nil,
                   let goal, let offset = spaces.offset(of: goal) else { return true }
             let gap = abs(offset)
@@ -167,6 +188,20 @@ final class HandoffProbe {
         guard observed.elementsEqual(expected) else {
             throw Failure("事件交接异常：预期 \(expected)，实测 \(observed)")
         }
+    }
+
+    // Reinsert an actual queued frame behind the next physical begin. Catch it
+    // downstream of the engine before it can visibly displace the new swipe.
+    func delayChangeAcrossBegin() {
+        previousChange = nil
+        replayedTimestamp = nil
+        replayReachedDock = false
+        replayOnNextBegin = true
+    }
+
+    func verifyDelayedChange() throws {
+        guard replayedTimestamp != nil, previousChange == nil else { throw Failure("未覆盖跟手和收尾两个重放时机") }
+        guard !replayReachedDock else { throw Failure("上一划的位置更新在下一划开始后仍被放行") }
     }
 
     func watch(_ goal: UInt64, skipBelowGap: Double? = nil, dropBelowGap: Double? = nil) {

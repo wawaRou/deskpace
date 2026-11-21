@@ -193,6 +193,16 @@ private final class MotionProbe {
         engine.start()
         defer { engine.stop() }
         guard engine.isRunning else { throw Failure("无法监听四指手势") }
+        if CommandLine.arguments.contains("--handoff") {
+            defer {
+                pump(for: 0.5)
+                try? move(to: display.origin)
+            }
+            _ = try leg(sign, to: neighbor, rate: 1, clicks: nil)
+            let baseline = try leg(-sign, to: home, rate: 1, clicks: nil)
+            for rate in [2.9, 4.0] { try rapidReturn(rate: rate, nativeT90: baseline.t90) }
+            return
+        }
         if CommandLine.arguments.contains("--chain") { try rapidAdvance(from: route.start); return }
         if CommandLine.arguments.contains("--cadence") {
             defer {
@@ -441,6 +451,7 @@ private final class MotionProbe {
 
     func rapidReturn(rate: Double, nativeT90: Double) throws {
         let eventsStart = handoff.events.endIndex
+        handoff.delayChangeAcrossBegin()
         engine.rate = rate
         swipe(sign, end: 0.22)
         let gap = abs(spaces.offset(of: neighbor) ?? 0)
@@ -453,6 +464,7 @@ private final class MotionProbe {
         guard gap > 20, abs(spaces.offset(of: neighbor) ?? gap) <= gap * 0.12,
               spaces.isCurrent(home, on: display) else { throw Failure("未覆盖两次手势重叠的时段") }
         let result = try leg(-sign, to: home, rate: rate, clicks: nil)
+        try handoff.verifyDelayedChange()
         try result.timing.checkRate(native: nativeT90, rate: rate)
         try handoff.verify([.begin, .postedEnd(4), .begin, .postedEnd(4)], since: eventsStart)
         print("连续往返 \(rate)×，回程首次位移 \(Int(result.firstStep.rounded())) 点，T90 \(Int(result.t90 * 1000)) ms")
