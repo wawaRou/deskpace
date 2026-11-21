@@ -118,7 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             button.image?.isTemplate = true
             button.setAccessibilityLabel("桌面切换速度")
-            button.toolTip = "Switch Desktop · 桌面切换速度"
+            button.toolTip = "DeskPace · 桌面切换速度"
             button.target = self
             button.action = #selector(togglePanel)
         }

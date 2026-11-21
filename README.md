@@ -1,10 +1,10 @@
-# Switch Desktop
+# DeskPace
 
 一个 macOS 菜单栏原型，用连续滑块调整四指切换桌面时，手指离开触控板后那一段横移动画的速度。
 
 ## 使用
 
-运行 `./build.sh`，打开 `build/Switch Desktop.app`。点菜单栏里的双向箭头，再点「授权辅助功能…」，在系统弹出的隐私设置里允许 Switch Desktop。这台 macOS 27 上的权限页叫「设备控制和数据访问」。授权生效后，菜单会显示「等待四指横移」或上次切换的实测耗时。
+运行 `./build.sh`，打开 `build/DeskPace.app`。点菜单栏里的双笔图标，再点「授权辅助功能…」，在系统弹出的隐私设置里允许 DeskPace。这台 macOS 27 上的权限页叫「设备控制和数据访问」。授权生效后，菜单会显示「等待四指横移」或上次切换的实测耗时。
 
 滑块范围为 **1× 到 4×**，支持小数。倍率从下一次手势开始生效，并保存在这台 Mac 上。新安装默认 1×。「恢复原速」把滑块设回 1×，退出应用也会让 macOS 完全接管手势。
 
@@ -20,7 +20,7 @@ git config --local switchdesktop.signingIdentity '替换为上一步所列证书
 ./build.sh
 ```
 
-重新打开新版。从临时签名首次迁移时，需要为固定身份授权一次。如果旧条目已经开启，新版仍提示等待授权，请移除旧条目，再添加 `build/Switch Desktop.app`。此后运行同一份项目里的 `./build.sh` 会复用已选身份。固定身份不可用时，构建会报错，原 App 可以继续使用。
+重新打开新版。从临时签名首次迁移时，需要为固定身份授权一次。如果旧条目已经开启，新版仍提示等待授权，请移除旧条目，再添加 `build/DeskPace.app`。此后运行同一份项目里的 `./build.sh` 会复用已选身份。固定身份不可用时，构建会报错，原 App 可以继续使用。
 
 GitHub Releases 分发可使用 `Developer ID Application` 身份签名并办理公证。构建环境也可以通过 `CODE_SIGN_IDENTITY` 指定证书。更换签名团队或证书类型时，应重新验证授权是否保留。[Apple 代码签名身份说明](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements)
 

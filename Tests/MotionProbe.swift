@@ -357,7 +357,7 @@ private final class MotionProbe {
     static func main() {
         setvbuf(stdout, nil, _IOLBF, 0)
         guard NSRunningApplication.runningApplications(withBundleIdentifier: "dev.switchdesktop.prototype").isEmpty else {
-            fputs("请先从菜单栏退出 Switch Desktop，避免重复处理同一手势。\n", stderr); exit(2)
+            fputs("请先从菜单栏退出 DeskPace，避免重复处理同一手势。\n", stderr); exit(2)
         }
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
