@@ -1,42 +1,26 @@
+<img src="Resources/logo.svg" width="72" height="72" alt="">
+
 # DeskPace
 
-DeskPace 是一款 macOS 菜单栏 App，用来调整四指横移切换桌面时**松手后的动画速度**。手指贴着触控板时，桌面照常跟手移动。松手后，切到相邻桌面和取消后弹回原桌面都使用你选的倍率。
+DeskPace 是一款 macOS 菜单栏工具，让你调快四指切换桌面时松手后的动画。滑动时桌面仍然跟手，松手后按你选的速度平滑到位。切到相邻桌面、切入全屏 App 或回弹到原桌面，都使用同一倍率。
 
-## 安装与首次使用
+## 安装与使用
 
-1. 在 macOS 26 或更高版本上，从 [GitHub Releases](https://github.com/wawaRou/deskpace/releases/latest) 下载 `DeskPace-<版本号>.zip`，解压，将 `DeskPace.app` 拖入「应用程序」并打开。当前 v0.1.6（构建号 7）已设为 Latest。仓库仍为私有，下载需要登录有访问权限的 GitHub 账号。此版使用临时签名，未经 Apple 公证。
-2. 点菜单栏里的单色双笔图标，打开倍率面板。首次使用时点「授权辅助功能…」，在系统隐私设置里允许 DeskPace。macOS 27 上该设置页名为「设备控制和数据访问」。面板显示「等待四指横移」表示手势监听已启动。
-3. 将连续滑块从默认的 **1×** 调到想要的倍率，最高 **4×**。四指切到相邻桌面即可体验。倍率从下一次手势开始生效，并保存在本机。
+需要 macOS 26 或更高版本，以及已启用四指切换桌面手势的触控板。已在 macOS 27 内建屏上实测。[兼容性与实测结果](docs/motion-verification.md)
 
-快划、慢划、滑动中停住再松手，都由 macOS 判定这次手势是切换还是回弹。刚切过去就往回划，回程也使用所选倍率。普通桌面和全屏 App 所在的空间共用这个设置。
+1. 从 [GitHub Releases](https://github.com/wawaRou/deskpace/releases/latest) 下载 `DeskPace-<版本号>.zip`，解压后将 `DeskPace.app` 拖入「应用程序」并打开。
+2. 点击菜单栏里的 DeskPace 图标，选择「授权辅助功能…」，在系统设置中允许 DeskPace 调节手势。
+3. 将滑块从 **1×（系统原速）** 调到想要的速度，最高 **4×**。下一次四指横移就会采用新倍率，设置会自动保存。
 
-面板会显示上一次切换或回弹实际采用的倍率，以及松手后走完剩余位移 90% 所用的毫秒数。「恢复原速」把倍率设回 1×。选择「退出」后，系统接管后续手势，再次打开 App 会恢复你保存的倍率。
-
-## 检查更新
-
-从 0.1.6 起，可以在倍率面板点「检查更新…」。Sparkle 从 GitHub 最新正式 Release 读取更新清单，发现新版后可在 App 内下载、校验并安装。默认由你手动发起检查。0.1.5 及更早的版本需先手动安装一次带更新器的版本。
-
-**仓库私有期间，点「检查更新…」会提示「获取升级信息时出现错误」。** App 匿名请求清单，即使浏览器已登录 GitHub，也只能在浏览器里手动下载。仓库公开后，只要 Latest Release 中的清单和对应 ZIP 可公开下载，现有 0.1.6 即可使用这个更新地址。
+仓库私有期间，请登录 GitHub 从 Releases 下载更新。仓库公开后，可直接在菜单栏面板点「检查更新…」。
 
 ## 从源码运行
 
-在装有 Xcode Command Line Tools 和支持 macOS 26 构建的 SDK 的 Mac 上，进入项目目录后执行：
+安装 Xcode Command Line Tools，使用支持 macOS 26 的 SDK，在项目根目录执行：
 
 ```sh
 ./build.sh
 open build/DeskPace.app
 ```
 
-首次构建会下载 Sparkle 并校验 SHA-256。产物同时包含 arm64 和 x86_64。若已打开另一份 DeskPace，请先从其菜单栏面板退出，再运行刚构建的版本。
-
-## 更新时保留授权
-
-macOS 根据代码签名识别已授权的 App。默认临时签名会随构建变化，本地持续开发时可配置固定签名身份。首次从临时签名切换到固定身份仍需重新授权。证书配置、授权条目失效时的处理和发布打包步骤见[签名与发布](docs/releasing.md)。
-
-## 兼容性与项目文档
-
-调速使用 macOS 私有接口，系统大版本升级后需要重新验证。macOS 27.2.1 内建屏已实测普通桌面与全屏空间；macOS 26 真机及外接显示器仍待验证。
-
-- [手势与真机验证](docs/motion-verification.md) — 回归测试命令、已测数据及待验证配置。
-- [手势术语](GLOSSARY.md) — 收尾、回弹、连续回切及面板耗时的含义。
-- [原生收尾动效](docs/adr/0001-preserve-native-swipe-motion.md)与[系统接口兼容性](docs/adr/0002-macos-version-compatibility.md) — 调速实现与设计取舍。
+[更新时保留授权](docs/releasing.md#本地构建与辅助功能授权) · [反馈问题](https://github.com/wawaRou/deskpace/issues)
