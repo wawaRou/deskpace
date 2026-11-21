@@ -31,9 +31,7 @@ git config --local switchdesktop.signingIdentity '替换为证书指纹'
 
 在 `wawaRou/deskpace` 为构建所用提交创建 Release 草稿，标签使用 `v<版本号>`。上传两份附件，核对版本、文件名和大小后发布为正式 Release，并设为 **Latest**。仅推送 Git 标签不会更新 App 使用的清单。
 
-当前公开版本使用临时签名。下一版 Release 的安装说明沿用以下文字，并与中英文 README 保持一致：
-
-> 当前下载包使用临时签名，未经 Apple 公证。macOS 可能阻止 App 首次打开。应用内更新由 Sparkle 验证签名。
+v0.1.6 的公开安装包使用临时签名，未经 Apple 公证。在 Release 安装说明中标明该版本实际使用的签名身份和公证状态。
 
 取得 Developer ID Application 证书后，再切换公开版的代码签名身份。届时从最终 ZIP 解压测试首次安装，并从上一公开版本测试更新、倍率设置和辅助功能授权；根据实测结果同步更新安装说明。
 
@@ -43,4 +41,4 @@ App 固定读取 [Latest Release 的 appcast.xml](https://github.com/wawaRou/des
 gh api repos/wawaRou/deskpace/releases/latest --jq '{tag: .tag_name, assets: [.assets[].name]}'
 ```
 
-私有仓库下，已登录账号能看到 Release，匿名更新器仍然无法下载清单。仓库公开后，用未登录的会话分别打开清单地址和其中的 ZIP 地址，即可核对用户实际能否下载这两份文件。
+发布后，用未登录 GitHub 的会话打开 Latest 的清单地址，再下载清单指向的 ZIP，确认 DeskPace 的匿名更新请求也能取得这两份附件。

@@ -106,7 +106,7 @@ final class HandoffProbe {
 
     private(set) var events: [Event] = []
     private var goal: UInt64?
-    private var dropAllUpdates = false
+    private var dropBelowGap: Double?
     private(set) var remaining: Double?
     private var skipBelowGap: Double?
     private(set) var skippedUpdate = false
@@ -144,11 +144,14 @@ final class HandoffProbe {
             events.append(posted ? .postedEnd(phase) : .nativeEnd(phase))
             if posted, let goal { remaining = spaces.offset(of: goal).map(abs) }
         case 2 where posted:
-            if dropAllUpdates {
+            guard dropBelowGap != nil || skipBelowGap != nil,
+                  let goal, let offset = spaces.offset(of: goal) else { return true }
+            let gap = abs(offset)
+            if let threshold = dropBelowGap, gap <= threshold {
                 skippedUpdate = true
                 return false
             }
-            if let threshold = skipBelowGap, let goal, let offset = spaces.offset(of: goal), abs(offset) <= threshold {
+            if let threshold = skipBelowGap, gap <= threshold {
                 skipBelowGap = nil
                 skippedUpdate = true
                 return false
@@ -166,8 +169,8 @@ final class HandoffProbe {
         }
     }
 
-    func watch(_ goal: UInt64, skipBelowGap: Double? = nil, dropAllUpdates: Bool = false) {
-        self.dropAllUpdates = dropAllUpdates
+    func watch(_ goal: UInt64, skipBelowGap: Double? = nil, dropBelowGap: Double? = nil) {
+        self.dropBelowGap = dropBelowGap
         self.goal = goal
         remaining = nil
         self.skipBelowGap = skipBelowGap

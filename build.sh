@@ -13,7 +13,7 @@ if [ -z "$identity" ]; then
         exit 1
     fi
     identity=-
-    printf '%s\n' '未配置固定签名身份，本次为临时签名。详见 README 的「更新时保留授权」。' >&2
+    printf '%s\n' '未配置固定签名身份，本次为临时签名。固定签名配置见 docs/releasing.md 的「本地构建与辅助功能授权」。' >&2
 fi
 sdk=$(xcrun --sdk macosx --show-sdk-path)
 sparkle=$(Scripts/prepare-sparkle.sh)

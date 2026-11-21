@@ -12,14 +12,15 @@ private func pump(for duration: Double) {
 }
 
 private struct LegMeasurement {
-    let t90: Double
+    let timing: MotionTiming
+    var t90: Double { timing.t90 }
     let current: Double
     let click: Double?
 }
 
 private struct RoundTrip {
-    let outboundT90: Double
-    let returnT90: Double
+    let outbound: MotionTiming
+    let back: MotionTiming
     let click: Double
 }
 
@@ -28,13 +29,13 @@ private func threeSamples<T>(_ measure: () throws -> T) rethrows -> [T] {
     try (0..<3).map { _ in try measure() }
 }
 
-private func medianOfThree(_ values: [Double]) -> Double {
+private func medianOfThree<T>(_ values: [T], by key: KeyPath<T, Double>) -> T {
     precondition(values.count == 3)
-    return values.sorted()[1]
+    return values.sorted { $0[keyPath: key] < $1[keyPath: key] }[1]
 }
 
 private enum Delivery {
-    case native, accelerated, timedOut
+    case native, accelerated, timedOut, timedOutAfterMotion
 }
 
 private final class MotionProbe {
@@ -44,9 +45,11 @@ private final class MotionProbe {
     let engine = SwipeEngine()
     let display: SwipeDisplay
     let point: CGPoint
-    let sign: Double
+    let route: ProbeRoute
+    var sign: Double { Double(route.step) }
     let home: UInt64
-    let neighbor: UInt64
+    var neighbor: UInt64 { display.spaces[route.start + route.step] }
+    private var frameIntervals: [Double] = []
 
     init() throws {
         guard AXIsProcessTrusted(), let spaces = NativeSpaces(), let input = GestureFixture(),
@@ -59,16 +62,11 @@ private final class MotionProbe {
         self.display = display
         handoff = try HandoffProbe(spaces: spaces)
         home = display.spaces[display.origin]
-        let directions: [Double] = CommandLine.arguments.contains("--previous") ? [-1] :
-            (CommandLine.arguments.contains("--next") ? [1] : [1, -1])
-        guard let sign = directions.first(where: { display.neighbor(in: $0) != nil }),
-              let neighbor = display.neighbor(in: sign) else { throw Failure("这个方向没有相邻桌面") }
-        self.sign = sign
-        self.neighbor = neighbor
-    }
-
-    var checks: MotionChecks {
-        MotionChecks(frameInterval: 1 / Double(max(1, display.screen.maximumFramesPerSecond)))
+        let args = CommandLine.arguments
+        let requestedStep = args.contains("--previous") ? -1 : (args.contains("--next") ? 1 : nil)
+        route = try ProbeRoute(origin: display.origin, count: display.spaces.count,
+                               requestedStep: requestedStep, chain: args.contains("--chain"))
+        engine.observeFrameInterval = { [weak self] interval in self?.frameIntervals.append(interval) }
     }
 
     func distance(to goal: UInt64) throws -> Double {
@@ -97,9 +95,16 @@ private final class MotionProbe {
         swipe(direction, end: p, interval: slow ? 0.020 : 0.0085, hold: releaseSpeed == 0 ? 0.18 : 0.025)
         let delivery = expectedDelivery ?? (rate == 1 ? .native : .accelerated)
         let initial = abs(spaces.offset(of: goal) ?? 0)
+        frameIntervals.removeAll(keepingCapacity: true)
         let endsStart = handoff.events.endIndex
+        let timeoutGap: Double?
+        switch delivery {
+        case .timedOut: timeoutGap = .infinity
+        case .timedOutAfterMotion: timeoutGap = initial * 0.9
+        default: timeoutGap = nil
+        }
         handoff.watch(goal, skipBelowGap: skipOneUpdate ? initial * 0.13 : nil,
-                      dropAllUpdates: delivery == .timedOut)
+                      dropBelowGap: timeoutGap)
         let start = CACurrentMediaTime()
         input.send(at: point, phase: 4, progress: p * direction, delta: releaseSpeed == 0 ? 0 : direction * p / 15,
                    velocity: direction * releaseSpeed)
@@ -134,10 +139,14 @@ private final class MotionProbe {
               let t90 = TailPoint.time(at: 0.9, in: points), let current else {
             throw Failure("未确认桌面到位：末次距离 \(last) 点，或未观测到目标收到点击")
         }
+        let timing = try MotionTiming(t90: t90, frameIntervals: frameIntervals)
         let expectedEnd: HandoffProbe.Event = delivery == .native ? .nativeEnd(4) : .postedEnd(4)
         try handoff.verify([expectedEnd], since: endsStart)
-        if delivery == .timedOut {
-            guard handoff.skippedUpdate, let remaining = handoff.remaining, remaining > 2 else { throw Failure("未触发到位前的超时交还") }
+        if let timeoutGap {
+            guard handoff.skippedUpdate, let remaining = handoff.remaining,
+                  remaining > 2, remaining <= timeoutGap else {
+                throw Failure("未触发指定位置的超时交还")
+            }
         } else if reversal >= max(5, initial * 0.012) {
             throw Failure("收尾出现反向位移")
         }
@@ -151,21 +160,21 @@ private final class MotionProbe {
             }
             // Equal distances around 90% should still be decelerating. Allow
             // two refresh periods and two polling intervals for frame timing.
-            let tolerance = 2 / Double(max(1, display.screen.maximumFramesPerSecond)) + 0.008
+            let tolerance = 2 * timing.frameInterval + 0.008
             guard let t85 = TailPoint.time(at: 0.85, in: points),
                   let t95 = TailPoint.time(at: 0.95, in: points),
                   t90 - t85 <= t95 - t90 + tolerance else {
                 throw Failure("桌面在 90% 附近减速后再次加速")
             }
         }
-        return LegMeasurement(t90: t90, current: current, click: clicks?.target.received.map { $0 - start })
+        return LegMeasurement(timing: timing, current: current, click: clicks?.target.received.map { $0 - start })
     }
 
     func run() throws {
         engine.start()
         defer { engine.stop() }
         guard engine.isRunning else { throw Failure("无法监听四指手势") }
-        if CommandLine.arguments.contains("--chain") { try rapidAdvance(); return }
+        if CommandLine.arguments.contains("--chain") { try rapidAdvance(from: route.start); return }
         let clicks = try ClickProbe(display: display)
         defer { clicks.close() }
         let deadline = CACurrentMediaTime() + 0.8
@@ -178,24 +187,24 @@ private final class MotionProbe {
         let kind = { (id: UInt64) in self.display.fullScreenSpaces.contains(id) ? "全屏" : "桌面" }
         print("\(kind(neighbor)) → \(kind(home))，同方向、同一目标窗口")
         // Neither landing kind has a recorded native curve at startup.
-        let coldRebound = try medianOfThree(threeSamples { try rebound(rate: 4) })
+        let coldRebound = try medianOfThree(threeSamples { try rebound(rate: 4) }, by: \.t90)
         let coldSwitch = try medianOfThree(threeSamples {
             let outbound = try leg(sign, to: neighbor, rate: 3, clicks: nil)
             _ = try leg(-sign, to: home, rate: 4, clicks: nil, skipOneUpdate: true)
-            return outbound.t90
-        })
+            return outbound.timing
+        }, by: \.t90)
 
         let native = try measureRoundTrips(rate: 1, clicks: clicks)
-        try checks.checkRate(coldSwitch, native: native.outboundT90, rate: 3)
+        try coldSwitch.checkRate(native: native.outbound.t90, rate: 3)
         let triple = try measureRoundTrips(rate: 3, clicks: clicks)
         let quadruple = try measureRoundTrips(rate: 4, clicks: clicks)
         for (rate, trip) in [(3.0, triple), (4.0, quadruple)] {
-            try checks.checkRate(trip.outboundT90, native: native.outboundT90, rate: rate)
-            try checks.checkRate(trip.returnT90, native: native.returnT90, rate: rate)
+            try trip.outbound.checkRate(native: native.outbound.t90, rate: rate)
+            try trip.back.checkRate(native: native.back.t90, rate: rate)
             guard trip.click < native.click * 0.8 else { throw Failure("点击等待时间未缩短") }
         }
-        try checks.checkSeparation(native: native.outboundT90, triple: triple.outboundT90, quadruple: quadruple.outboundT90)
-        try checks.checkSeparation(native: native.returnT90, triple: triple.returnT90, quadruple: quadruple.returnT90)
+        try MotionTiming.checkSeparation(native: native.outbound.t90, triple: triple.outbound.t90, quadruple: quadruple.outbound.t90)
+        try MotionTiming.checkSeparation(native: native.back.t90, triple: triple.back.t90, quadruple: quadruple.back.t90)
         var nativeSlow: [LegMeasurement] = []
         for rate in [1.0, 3.0] {
             let slow = try leg(sign, to: neighbor, rate: rate, clicks: nil, releaseSpeed: 0.76)
@@ -204,18 +213,22 @@ private final class MotionProbe {
             if rate == 1 { nativeSlow = [slow, held] }
             else {
                 for (result, native) in zip([slow, held], nativeSlow) {
-                    try checks.checkRate(result.t90, native: native.t90, rate: rate)
+                    try result.timing.checkRate(native: native.t90, rate: rate)
                 }
             }
         }
-        let nativeRebound = try medianOfThree(threeSamples { try rebound(rate: 1) })
-        let selectedRebound = try medianOfThree(threeSamples { try rebound(rate: 4) })
-        print("回弹 T90：原速 \(Int(nativeRebound * 1000)) ms，4× 预设 / 校准曲线 \(Int(coldRebound * 1000)) / \(Int(selectedRebound * 1000)) ms")
-        try checks.checkRate(coldRebound, native: nativeRebound, rate: 4)
-        try checks.checkRate(selectedRebound, native: nativeRebound, rate: 4)
-        try feedbackRecovery(nativeReturn: native.returnT90)
-        try rapidReturn(nativeT90: native.returnT90)
-        if display.spaces.count >= 3 { try rapidAdvance() }
+        let nativeRebound = try medianOfThree(threeSamples { try rebound(rate: 1) }, by: \.t90)
+        let selectedRebound = try medianOfThree(threeSamples { try rebound(rate: 4) }, by: \.t90)
+        print("回弹 T90：原速 \(Int(nativeRebound.t90 * 1000)) ms，4× 预设 / 校准曲线 \(Int(coldRebound.t90 * 1000)) / \(Int(selectedRebound.t90 * 1000)) ms")
+        try coldRebound.checkRate(native: nativeRebound.t90, rate: 4)
+        try selectedRebound.checkRate(native: nativeRebound.t90, rate: 4)
+        try feedbackRecovery(nativeReturn: native.back.t90)
+        try rapidReturn(nativeT90: native.back.t90)
+        if display.spaces.count >= 3 {
+            let chain = try ProbeRoute(origin: display.origin, count: display.spaces.count,
+                                       requestedStep: route.step, chain: true)
+            try rapidAdvance(from: chain.start)
+        }
     }
 
     func measureRoundTrips(rate: Double, clicks: ClickProbe) throws -> RoundTrip {
@@ -226,33 +239,31 @@ private final class MotionProbe {
             let back = try leg(-sign, to: home, rate: rate, clicks: clicks)
             guard let clicked = back.click else { throw Failure("目标窗口未收到点击") }
             print("\(rate)×  去程 / 回程 T90 \(Int(outbound.t90 * 1000)) / \(Int(back.t90 * 1000)) ms  回程当前空间 \(Int(back.current * 1000)) ms  窗口收到点击 \(Int(clicked * 1000)) ms")
-            return RoundTrip(outboundT90: outbound.t90, returnT90: back.t90, click: clicked)
+            return RoundTrip(outbound: outbound.timing, back: back.timing, click: clicked)
         }
-        return RoundTrip(outboundT90: medianOfThree(samples.map(\.outboundT90)),
-                         returnT90: medianOfThree(samples.map(\.returnT90)),
-                         click: medianOfThree(samples.map(\.click)))
+        return RoundTrip(outbound: medianOfThree(samples.map(\.outbound), by: \.t90),
+                         back: medianOfThree(samples.map(\.back), by: \.t90),
+                         click: medianOfThree(samples, by: \.click).click)
     }
 
     func feedbackRecovery(nativeReturn: Double) throws {
         _ = try leg(sign, to: neighbor, rate: 3, clicks: nil, expectedDelivery: .timedOut)
         _ = try leg(-sign, to: home, rate: 3, clicks: nil, expectedDelivery: .native)
 
-        // A second failed attempt requires two healthy native landings.
-        _ = try leg(sign, to: neighbor, rate: 3, clicks: nil, expectedDelivery: .timedOut)
+        // This time, allow at least 10% of the motion before dropping the remaining updates.
+        _ = try leg(sign, to: neighbor, rate: 3, clicks: nil, expectedDelivery: .timedOutAfterMotion)
         _ = try leg(-sign, to: home, rate: 3, clicks: nil, expectedDelivery: .native)
         _ = try leg(sign, to: neighbor, rate: 3, clicks: nil, expectedDelivery: .native)
         let restored = try leg(-sign, to: home, rate: 3, clicks: nil)
-        try checks.checkRate(restored.t90, native: nativeReturn, rate: 3)
+        try restored.timing.checkRate(native: nativeReturn, rate: 3)
         print("连续两次超时后，分别经过 1 次和 2 次原速到位，同屏恢复 3×")
     }
 
     // Two swipes in the same direction, with the middle Space still moving
     // when tracking starts on the second swipe.
-    func rapidAdvance() throws {
+    func rapidAdvance(from start: Int) throws {
         let order = display.spaces
-        guard order.count >= 3 else { throw Failure("连续同向切换需要三个相邻空间") }
         let step = Int(sign)
-        let start = step > 0 ? min(display.origin, order.count - 3) : max(display.origin, 2)
         let middle = start + step
         let finish = middle + step
 
@@ -283,7 +294,7 @@ private final class MotionProbe {
             guard remaining >= gap * 0.40, remaining <= gap * 0.65,
                   spaces.isCurrent(order[start], on: display) else { throw Failure("未覆盖中间桌面仍在移动的时段") }
             let second = try leg(sign, to: order[finish], rate: 3, clicks: nil)
-            try checks.checkRate(second.t90, native: baseline.t90, rate: 3)
+            try second.timing.checkRate(native: baseline.t90, rate: 3)
             try handoff.verify([.begin, .postedEnd(4), .begin, .postedEnd(4)], since: eventStart)
             print("连续同向切换三个空间，第二程原速 / 3× T90 \(Int(baseline.t90 * 1000)) / \(Int(second.t90 * 1000)) ms")
         } catch {
@@ -308,15 +319,16 @@ private final class MotionProbe {
         guard gap > 20, abs(spaces.offset(of: neighbor) ?? gap) <= gap * 0.12,
               spaces.isCurrent(home, on: display) else { throw Failure("未覆盖两次手势重叠的时段") }
         let result = try leg(-sign, to: home, rate: 3, clicks: nil)
-        try checks.checkRate(result.t90, native: nativeT90, rate: 3)
+        try result.timing.checkRate(native: nativeT90, rate: 3)
         try handoff.verify([.begin, .postedEnd(4), .begin, .postedEnd(4)], since: eventsStart)
         print("连续往返 3×，回程 T90 \(Int(result.t90 * 1000)) ms，已回到起始桌面")
     }
 
-    func rebound(rate: Double) throws -> Double {
+    func rebound(rate: Double) throws -> MotionTiming {
         engine.rate = rate
         swipe(sign, end: 0.22)
         let initial = abs(spaces.offset(of: home) ?? 0)
+        frameIntervals.removeAll(keepingCapacity: true)
         let endsStart = handoff.events.endIndex
         handoff.watch(home)
         let start = CACurrentMediaTime()
@@ -334,7 +346,7 @@ private final class MotionProbe {
         if rate > 1, (handoff.remaining ?? .infinity) > 2 {
             throw Failure("取消事件未在原桌面到位后送出，回弹 T90 为 \(Int(time * 1000)) 毫秒")
         }
-        return time
+        return try MotionTiming(t90: time, frameIntervals: frameIntervals)
     }
 }
 

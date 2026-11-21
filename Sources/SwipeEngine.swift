@@ -117,6 +117,7 @@ final class SwipeEngine: NSObject {
     var rate = 1.0
     var report: (String) -> Void = { _ in }
     var trace: ((String) -> Void)?
+    var observeFrameInterval: ((CFTimeInterval) -> Void)?
     private var feedback = DisplayFeedback()
     private let spaces = NativeSpaces()
     private let payload = SwipePayload()
@@ -300,20 +301,20 @@ final class SwipeEngine: NSObject {
             interrupt()
             return
         }
+        let frameInterval = sender.targetTimestamp - sender.timestamp
         let elapsed = CACurrentMediaTime() - run.start
         let distance = abs(position)
+        if distance > DisplayFeedback.landingTolerance { observeFrameInterval?(frameInterval) }
         let measured = 1 - distance / run.gap
         if let trace { trace("frame t=\(elapsed) gap=\(distance)") }
         if let playback {
             let fraction = playback.curve.progress(after: max(elapsed, sender.targetTimestamp - run.start), rate: run.rate)
             switch playback.step(targetX: position, fraction: fraction, elapsed: elapsed,
-                                 frameInterval: sender.targetTimestamp - sender.timestamp) {
+                                 frameInterval: frameInterval) {
             case .wait:
                 break
             case .unresponsive:
-                if measured < 0.04 {
-                    feedback.missedFeedback(on: run.display.screenID)
-                }
+                feedback.missedFeedback(on: run.display.screenID)
                 interrupt()
                 report("未收到桌面位移反馈，本次由系统收尾")
                 return
@@ -337,7 +338,7 @@ final class SwipeEngine: NSObject {
             run.samples.append(TailPoint(time: elapsed, progress: fraction))
         }
         if run.kind == .nextSpace, distance > run.gap + max(10, run.pitch * 0.025) { run.movedAway = true }
-        if distance <= 1.5 {
+        if distance <= DisplayFeedback.landingTolerance {
             if run.settledAt == nil { run.settledAt = elapsed }
             if playback == nil, spaces?.isCurrent(run.target, on: run.display) == true {
                 finish(run)
@@ -363,8 +364,8 @@ final class SwipeEngine: NSObject {
         let id = run.display.screenID
         if run.rate > 1 {
             feedback.confirmedPlayback(on: id)
-        } else if run.samples.contains(where: { $0.progress > 0 && $0.progress < 1 }) {
-            feedback.confirmedNativeLanding(on: id)
+        } else {
+            feedback.confirmedNativeLanding(on: id, gap: run.gap, samples: run.samples)
         }
         if run.rate == 1, settled > 0.10, settled < 1.6 {
             let points = run.samples.filter { $0.time < settled && $0.progress < 1 }
