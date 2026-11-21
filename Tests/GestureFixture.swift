@@ -4,7 +4,21 @@ import Foundation
 
 /// A reproducible horizontal swipe for the live test. This code is excluded
 /// from the app. Samples use the same progress and velocity in both directions.
+/// It writes the event with its own field numbers instead of `SwipeField`, so
+/// a wrong number in the app cannot also slip into the gestures that test it.
 final class GestureFixture {
+    private enum Raw {
+        static let type = CGEventType(rawValue: 30)!
+        static let kind = CGEventField(rawValue: 110)!
+        static let axis = CGEventField(rawValue: 123)!
+        static let progress = CGEventField(rawValue: 124)!
+        static let deltaX = CGEventField(rawValue: 125)!
+        static let speed = CGEventField(rawValue: 129)!
+        static let speedX = CGEventField(rawValue: 130)!
+        static let phase = CGEventField(rawValue: 132)!
+        static let companionPhase = CGEventField(rawValue: 134)!
+    }
+
     private typealias MakeSwipe = @convention(c) (CFAllocator?, UInt64, UInt32, UInt16, Double, Double, Double, UInt32) -> Unmanaged<CFTypeRef>?
     private typealias MakeVelocity = @convention(c) (CFAllocator?, UInt64, Double, Double, Double, UInt32) -> Unmanaged<CFTypeRef>?
     private typealias Append = @convention(c) (CFTypeRef, CFTypeRef, UInt32) -> Void
@@ -46,16 +60,16 @@ final class GestureFixture {
         if phase == 4, let axis = makeVelocity(nil, stamp, -velocity, -velocity, 0, 0)?.takeRetainedValue() {
             append(raw, axis, 0)
         }
-        event.type = SwipeField.type
+        event.type = Raw.type
         event.location = point
-        event.setIntegerValueField(SwipeField.kind, value: 23)
-        event.setIntegerValueField(SwipeField.axis, value: 1)
-        event.setIntegerValueField(SwipeField.phase, value: Int64(phase))
-        event.setIntegerValueField(SwipeField.companionPhase, value: Int64(phase))
-        event.setDoubleValueField(SwipeField.progress, value: progress)
-        event.setDoubleValueField(SwipeField.deltaX, value: delta)
-        event.setDoubleValueField(SwipeField.speed, value: velocity)
-        event.setDoubleValueField(SwipeField.speedX, value: velocity)
+        event.setIntegerValueField(Raw.kind, value: 23)
+        event.setIntegerValueField(Raw.axis, value: 1)
+        event.setIntegerValueField(Raw.phase, value: Int64(phase))
+        event.setIntegerValueField(Raw.companionPhase, value: Int64(phase))
+        event.setDoubleValueField(Raw.progress, value: progress)
+        event.setDoubleValueField(Raw.deltaX, value: delta)
+        event.setDoubleValueField(Raw.speed, value: velocity)
+        event.setDoubleValueField(Raw.speedX, value: velocity)
         attach(event, raw)
         event.post(tap: .cghidEventTap)
     }

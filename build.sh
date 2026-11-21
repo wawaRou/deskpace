@@ -13,14 +13,14 @@ if [ -z "$identity" ]; then
         exit 1
     fi
     identity=-
-    printf '%s\n' '未配置固定签名身份，本次为临时签名。固定签名配置见 docs/releasing.md 的「本地构建与辅助功能授权」。' >&2
+    printf '%s\n' '未配置固定签名身份，本次为临时签名。固定签名配置见 docs/releasing.md 的「签名证书」。' >&2
 fi
 sdk=$(xcrun --sdk macosx --show-sdk-path)
 sparkle=$(Scripts/prepare-sparkle.sh)
 for arch in arm64 x86_64; do
     xcrun swiftc -O -whole-module-optimization -swift-version 5 \
         -sdk "$sdk" -target "$arch-apple-macos26.0" -F "$sparkle" -framework Sparkle \
-        -Xlinker -rpath -Xlinker @executable_path/../Frameworks Sources/*.swift -o "$stage/$arch"
+        -Xlinker -rpath -Xlinker @executable_path/../Frameworks Sources/*.swift Sources/App/*.swift -o "$stage/$arch"
 done
 iconset="$stage/AppIcon.iconset"
 mkdir -p "$iconset"

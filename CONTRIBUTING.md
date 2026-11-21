@@ -2,16 +2,24 @@
 
 ## 从源码运行
 
-在 Mac 上安装 Xcode Command Line Tools，使用支持 macOS 26 的 SDK。若 DeskPace 已经运行，先在菜单栏面板点「退出」。然后在仓库根目录构建并打开 App。
+在 Mac 上安装 Xcode Command Line Tools，使用支持 macOS 26 的 SDK。若 DeskPace 已经运行，先在菜单栏面板点「退出」。否则新构建不会接管手势：`open` 可能只是重新激活仍在运行的旧进程，从其他位置启动的新构建则会提示已有一份在运行，随即退出。然后在仓库根目录构建并打开 App。首次构建会从 GitHub 下载固定版本的 Sparkle，校验后缓存到 `.build/`。
 
 ```sh
 ./build.sh
 open build/DeskPace.app
 ```
 
-打开面板，按提示授予辅助功能权限。默认构建使用临时签名。如果每次重新构建都要授权，可以给这个仓库配置固定签名身份。[本地构建与辅助功能授权](docs/releasing.md#本地构建与辅助功能授权)
+打开面板，按提示授予辅助功能权限。默认构建使用临时签名，每次重新构建都要重新授权。想免去这一步，可以在「钥匙串访问 → 证书助理 → 创建证书」中创建一张「代码签名」类型的自签证书，再按[签名证书](docs/releasing.md#签名证书)一节把它配置给这个仓库。
 
-## 修改手势代码
+调试时可以从终端直接运行可执行文件，加 `--trace` 打印手势和状态日志。这样启动时，辅助功能权限算在终端上，需要先给终端授权。
+
+```sh
+build/DeskPace.app/Contents/MacOS/DeskPace --trace
+```
+
+## 修改代码
+
+`Sources/` 根目录下是手势引擎，测试程序会一起编译。`Sources/App/` 下是菜单栏 App，依赖 SwiftUI 和 Sparkle，不进入测试程序。
 
 | 改动 | 相关文件 |
 | --- | --- |
@@ -20,8 +28,11 @@ open build/DeskPace.app
 | 读取显示器上的空间排列、当前空间和位置 | [NativeSpaces.swift](Sources/NativeSpaces.swift) |
 | 计算松手后每一帧的位移 | [TailCurve.swift](Sources/TailCurve.swift) |
 | 某块显示器失去位移反馈后，决定何时重试加速 | [DisplayFeedback.swift](Sources/DisplayFeedback.swift) |
+| 倍率、授权、登录项、更新和旧设置迁移 | [MenuModel.swift](Sources/App/MenuModel.swift) |
+| 菜单栏面板和设置窗口 | [Panels.swift](Sources/App/Panels.swift)、[main.swift](Sources/App/main.swift) |
+| 状态提示的文案。面板和窗口里的文字写在 Panels.swift、main.swift 中，每条都要同时写中英文 | [AppLanguage.swift](Sources/App/AppLanguage.swift) |
 
-测试程序独立构造手势输入。修改事件编码时，保留这条独立的测试路径，否则 App 和测试可能把同一个字段写错。[测试手势的构造](Tests/GestureFixture.swift)
+测试程序不复用 App 的事件编码，而是用自己的一份字段编号构造手势输入。修改事件字段时保留这种独立性，否则 App 和测试会带着同一个错误通过。[测试手势的构造](Tests/GestureFixture.swift)
 
 ## 提交前验证
 
@@ -38,7 +49,7 @@ open build/DeskPace.app
 
 | 要记录的内容 | 文档 |
 | --- | --- |
-| 安装、授权、面板操作 | [英文 README](README.md) 和[中文 README](README.zh-CN.md)，两份同步更新 |
+| 安装、授权、面板操作 | [英文 README](README.md) 和[中文 README](README.zh-CN.md)，两份同步更新。改了界面文字，也要同步其中的按钮名 |
 | 手势和计时指标的含义 | [术语表](GLOSSARY.md) |
 | 为什么保留系统动画，为什么使用私有接口 | [手势设计决定](docs/adr/0001-preserve-native-swipe-motion.md)、[兼容性决定](docs/adr/0002-macos-version-compatibility.md) |
 | 怎样复测、怎样判断通过 | [手势验证方法](docs/motion-verification.md) |

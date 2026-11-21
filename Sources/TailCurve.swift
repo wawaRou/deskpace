@@ -38,6 +38,18 @@ struct TailCurve {
         slopeAt90 = min(0.9, 0.05 * t90 / (t95 - t90))
     }
 
+    /// Learn from a native landing on one display. The curve ends at the final
+    /// arrival: earlier frames that touched the target and later frames are
+    /// dropped. A landing too short or long to be a normal tail yields no curve.
+    init?(learnedFrom samples: [TailPoint], settledAt settled: Double) {
+        guard settled > 0.10, settled < 1.6 else { return nil }
+        let points = samples.filter { $0.time < settled && $0.progress < 1 }
+        self.init(points + [TailPoint(time: settled, progress: 1)])
+    }
+
+    /// Fraction of the remaining distance covered `elapsed` seconds after lift.
+    /// At 1× this is the recording. Up to 2× it blends toward a smoothed curve:
+    /// a quick start, an even cruise, then the recorded final 10%.
     func progress(after elapsed: Double, rate: Double) -> Double {
         let t = elapsed * rate
         if t <= 0 { return 0 }

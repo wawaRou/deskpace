@@ -7,8 +7,9 @@
 | 要检查的问题 | 命令 | 检查内容 |
 | --- | --- | --- |
 | 改了曲线、计时或重试条件 | `./Tests/verify-motion.sh --offline` | 用固定样本核对数值，无需辅助功能权限。 |
-| 下一划开始后画面突然跳回 | `./Tests/verify-motion.sh --handoff` | 在 2.9× 和 4× 下，将上一划的一帧分别在新手势开始时、新手势进入收尾后重发。两次都应拦截，回程 T90 应符合所选倍率。 |
-| 同向连划时第二程退回原速 | `./Tests/verify-motion.sh --chain` | 需要三个相邻空间。第一程还剩约一半位移时开始第二划，检查事件顺序、第二程 3× 的 T90 和落点。 |
+| 下一划开始后画面突然跳回 | `./Tests/verify-motion.sh --handoff` | 在 2.9× 和 4× 下，将上一划的一帧分别在新手势开始时、新手势进入收尾后重发。两次都应拦截，回程 T90 应符合所选倍率。另将交付结束事件的唤醒信号扣到下一划开始后再放行，检查每划只结束一次。 |
+| 多个桌面快速连划、途中反向 | `./Tests/verify-motion.sh --rapid-sequence` | 需要三个相邻空间。分别在 2.9× 和 4× 下，剩余 45% 和 20% 桌面间距时开始下一划，检查连续八划的顺序和最终落点。 |
+| 同向连划时第二程退回原速 | `./Tests/verify-motion.sh --chain` | 需要三个相邻空间。第一程还剩约一半位移时开始第二划，检查事件顺序、第二程 2.9×、3× 和 4× 的 T90 和落点。 |
 | 短划、长划、回弹或连续划动有停顿 | `./Tests/verify-motion.sh --cadence` | 比较 1×、1.99×、2.9× 和 4× 的桌面位置与采样间隔，覆盖左右边界。有三个空间时加测连续八划。 |
 | 常规切换、点击和异常恢复 | `./Tests/verify-motion.sh` | 测试双向切换、慢划、停住再松手、取消回弹、点击等待、连续回切及反馈超时。 |
 
@@ -22,7 +23,7 @@
 
 - **到位。** 目标已成为当前空间，距落点不超过 2 点，并连续保持至少 35 毫秒。超时即失败。
 - **倍率。** 用同方向的原速 T90 除以所选倍率，得到预期 T90。把预期 T90 的 12% 和「一个实测刷新周期加 4 毫秒」作比较，取较大值作为允许误差。刷新周期取该程收尾期间刷新回调所报周期的中位数。3× 和 4× 的耗时差至少要达到预期差值的一半。
-- **点击。** 常规测试每隔约 20 毫秒尝试点击起始空间里的临时窗口，以窗口实际收到点击为准。3× 和 4× 回程的点击等待时间应低于原速的 80%。常规往返、冷启动切换和回弹的倍率比较取三次测量的中位数。
+- **点击。** 常规测试每隔约 20 毫秒尝试点击起始空间里的临时窗口，以窗口实际收到点击为准。3× 和 4× 回程的点击等待时间应低于原速的 80%。常规往返、没有原速记录时的切换和回弹，倍率比较都取三次测量的中位数。
 - **手势顺序。** 上一划的结束事件应在下一划开始前交给系统，而且只能交付一次。测试还要检查下一划开始后是否放行了旧的位置更新。仅检查最终桌面会漏掉中间的跳动。
 
 ## 各场景怎样测
@@ -36,3 +37,14 @@
 `--cadence` 在 T90 前同时报告最长位置更新间隔和最长轮询间隔。轮询本身迟到也会拉长前一个数值。左右边界应由系统收到原始取消事件，桌面位置应稳定回到零附近。有三个空间时，程序沿 A、B、C、B、A 往返两遍。离目标还剩 45% 桌面间距时开始下一划，允许系统处理过早反向的一程。还剩 20% 时开始下一划，八程都应加速。
 
 `--offline` 在 60 Hz 和 120 Hz 下按帧采样预设曲线，从 1× 到 4× 每隔 0.125× 核对 T90、到位时间和移动方向。2× 至 4× 的最大单帧位移应在前 90% 平均每帧位移的 1.2 倍以内。其余样本检查迟到的刷新、松手后才显示的末笔位移、到位判定、同屏重试间隔和三空间测试起点。
+
+## macOS 大版本复测
+
+新的 macOS 大版本发布后，先确认 DeskPace 依赖的私有接口仍然存在，再在真机上跑完上面的全部测试，最后更新[手势实测记录](motion-results.md)和两份 README 的支持范围。[为什么使用私有接口](adr/0002-macos-version-compatibility.md)
+
+- SkyLight：`SLSMainConnectionID`、`SLSCopyManagedDisplaySpaces`、`SLSSpaceGetTransform`、`SLEventCopyIOHIDEvent`、`SLEventSetIOHIDEvent`
+- IOKit：`IOHIDEventCreateCopy`、`IOHIDEventGetType`、`IOHIDEventSetPhase`、`IOHIDEventGetFloatValue`、`IOHIDEventSetFloatValue`、`IOHIDEventSetTimeStamp`、`IOHIDEventGetEventWithOptions`
+- 未公开的 Quartz 事件类型 30，以及字段 110、123–126、129、130、132、134，见 [SwipePayload.swift](../Sources/SwipePayload.swift)
+- 测试程序另需 IOKit 的 `IOHIDEventCreateDockSwipeEvent`、`IOHIDEventCreateVelocityEvent`、`IOHIDEventAppendEvent`、`IOHIDEventSetIntegerValue`。缺少时，探针会报告需要辅助功能权限，而不是缺少接口。
+
+符号缺失时，面板会显示「此系统的桌面接口暂不可用」。符号仍在但行为改变时，离线测试发现不了，只能靠真机测试。

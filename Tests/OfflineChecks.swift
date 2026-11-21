@@ -44,7 +44,7 @@ func runOfflineChecks() throws {
         let measuredTravel = (progress - start) * 893 / 0.85 * sign
         let expectedTravel = 683 * curve.progress(after: interval, rate: 1.99)
         try require(abs(measuredTravel - expectedTravel) < 0.01, "收尾第一步仍按滞后的位移换算")
-        playback.previous = progress
+        try require(playback.previous == progress, "发出位置后未记下本次进度")
         let secondDeadline = 2 * interval
         guard case .awaitingFeedback = playback.step(targetX: -683 * sign, presentationTime: secondDeadline,
                                                      rate: 1.99, elapsed: interval, frameInterval: interval),
@@ -171,5 +171,60 @@ func runOfflineChecks() throws {
         try expectFailure { _ = try ProbeRoute(origin: origin, count: 3, requestedStep: step, chain: false) }
     }
     try expectFailure { _ = try ProbeRoute(origin: 0, count: 2, requestedStep: 1, chain: true) }
-    print("离线回归通过：到位、切换帧位移、实测刷新周期与倍率、同屏反馈恢复、三空间起点")
+    try checkPlaybackBoundaries(require)
+    try checkLearnedCurve(require)
+    print("离线回归通过：到位、切换帧位移、实测刷新周期与倍率、同屏反馈恢复、三空间起点、回放边界、原速记录")
+}
+
+private typealias Requirement = (Bool, String) throws -> Void
+
+/// When playback refuses to start, finishes, or gives up on missing feedback.
+private func checkPlaybackBoundaries(_ require: Requirement) throws {
+    func playback(progress: Double, originX: Double, targetX: Double,
+                  kind: LandingKind = .nextSpace) throws -> Playback? {
+        guard let changed = CGEvent(source: nil), let end = CGEvent(source: nil) else {
+            throw Failure("无法构造回放用例")
+        }
+        changed.type = SwipeField.type
+        changed.setDoubleValueField(SwipeField.progress, value: progress)
+        return Playback(kind: kind, changed: changed, end: end, trackingOriginX: 0, originX: originX,
+                        targetX: targetX, orientation: 1, curve: .reference)
+    }
+    try require(try playback(progress: 0.0005, originX: 400, targetX: -500) == nil, "几乎没有跟手位移仍接管收尾")
+    try require(try playback(progress: 0.5, originX: -400, targetX: -500) == nil, "跟手方向与进度相反仍接管收尾")
+    try require(try playback(progress: 0.5, originX: 400, targetX: 500) == nil, "切换落点在手势反方向仍接管收尾")
+    try require(try playback(progress: 0.5, originX: 1.5, targetX: -500) == nil, "跟手不足 2 点仍接管收尾")
+
+    let frame = 1.0 / 120
+    guard let run = try playback(progress: 0.5, originX: 400, targetX: -500) else {
+        throw Failure("无法启动回放")
+    }
+    guard case .finish = run.step(targetX: DisplayFeedback.landingTolerance, presentationTime: frame,
+                                  rate: 3, elapsed: frame, frameInterval: frame) else {
+        throw Failure("已在到位容差内仍未结束回放")
+    }
+    guard let stalled = try playback(progress: 0.5, originX: 400, targetX: -500),
+          case .move = stalled.step(targetX: -500, presentationTime: frame, rate: 3,
+                                    elapsed: frame, frameInterval: frame),
+          case .awaitingFeedback = stalled.step(targetX: -500, presentationTime: 2 * frame, rate: 3,
+                                                elapsed: 0.010, frameInterval: frame),
+          case .unresponsive = stalled.step(targetX: -500, presentationTime: 0.1, rate: 3,
+                                            elapsed: 0.1, frameInterval: frame) else {
+        throw Failure("桌面不再移动时未按超时交还系统")
+    }
+}
+
+/// Which native landings may replace the reference curve for a display.
+private func checkLearnedCurve(_ require: Requirement) throws {
+    // The desktop touches the target, drifts 1% away, then settles at 0.25 s.
+    let landing = [(0.0, 0.0), (0.05, 0.3), (0.1, 0.6), (0.15, 0.95), (0.2, 1.0), (0.22, 0.99), (0.25, 1.0), (0.3, 1.0)]
+        .map { TailPoint(time: $0.0, progress: $0.1) }
+    guard let learned = TailCurve(learnedFrom: landing, settledAt: 0.25) else {
+        throw Failure("正常的原速收尾未被记录")
+    }
+    try require(learned.points.filter { $0.progress == 1 }.count == 1 && learned.duration == 0.25,
+                "原速记录在到位后仍保留了重复样本")
+    try require(TailCurve(learnedFrom: landing, settledAt: 0.05) == nil, "过短的收尾被当作原速记录")
+    try require(TailCurve(learnedFrom: landing, settledAt: 1.7) == nil, "过长的收尾被当作原速记录")
+    try require(TailCurve(learnedFrom: [landing[0]], settledAt: 0.3) == nil, "样本不足仍生成原速记录")
 }

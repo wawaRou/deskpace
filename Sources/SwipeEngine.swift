@@ -9,8 +9,12 @@ private struct Gesture {
     let trackingOriginX: Double
     let visited: ClosedRange<Int>
     var changed: CGEvent?
+    /// When the tap received `changed`. Physical event timestamps do not
+    /// share a clock with the display link on every Mac.
+    var changedAt: CFTimeInterval?
 }
 
+/// The terminal `SwipeField.phase`: 4 completes a switch, 8 cancels the swipe.
 enum LandingKind: Int64 {
     case nextSpace = 4
     case rebound = 8
@@ -85,7 +89,8 @@ final class Playback {
     private var pointsPerUnit: Double
     private var pending: Pending?
     private var clock = PlaybackClock()
-    var previous: Double
+    /// The last position sent to macOS, updated when `step` returns `.move`.
+    private(set) var previous: Double
 
     init?(kind: LandingKind, changed: CGEvent, end: CGEvent, trackingOriginX: Double,
           originX: Double, targetX: Double, orientation: Double, curve: TailCurve) {
@@ -112,7 +117,7 @@ final class Playback {
     /// Match compositor feedback to one outstanding tracking position. Both the
     /// conversion and the decision to release depend on the real Space transform.
     func step(targetX: Double, presentationTime: Double, rate: Double, elapsed: Double, frameInterval: Double) -> Step {
-        if abs(targetX) <= 1 { return .finish }
+        if abs(targetX) <= DisplayFeedback.landingTolerance { return .finish }
         if previous == startProgress, targetX == targetAtStart,
            trackingAgeAtLift + elapsed < frameInterval,
            changed.getDoubleValueField(SwipeField.deltaX) != 0 {
@@ -157,6 +162,7 @@ final class Playback {
         let progress = previous + step / pointsPerUnit
         guard progress.isFinite else { return .unresponsive }
         pending = Pending(issued: elapsed, targetBefore: targetX, expectedStep: step)
+        previous = progress
         return .move(progress)
     }
 }
@@ -168,6 +174,9 @@ enum SwipeStatus {
 }
 
 final class SwipeEngine: NSObject {
+    /// A landing that has not settled by then is handed back to macOS.
+    static let landingTimeout = 1.8 // seconds
+
     var rate = 1.0
     var report: (SwipeStatus) -> Void = { _ in }
     var trace: ((String) -> Void)?
@@ -181,17 +190,23 @@ final class SwipeEngine: NSObject {
     private var gesture: Gesture?
     private var landing: Landing?
     private var playback: Playback?
-    private var queuedEnd: CGEvent?
+    // Keep the only copy of the end here. A null event wakes the tap after a
+    // frame callback. If it bypasses a disabled tap, Dock sees no swipe.
+    private var pendingEnd: CGEvent?
+    private let releaseWake = CGEvent(source: nil)
     private var curves: [LandingKind: [CGDirectDisplayID: TailCurve]] = [:]
 
     var isRunning: Bool { tap.map(CGEvent.tapIsEnabled(tap:)) ?? false }
 
+    // The tap holds an unretained pointer to the engine.
+    deinit { stop() }
+
     func start() {
         guard !isRunning else { return }
         stop()
-        guard spaces != nil, payload != nil else { report(.spacesUnavailable); return }
+        guard spaces != nil, payload != nil, releaseWake != nil else { report(.spacesUnavailable); return }
         guard AXIsProcessTrusted() else { report(.needsAccess); return }
-        let mask = CGEventMask(1) << SwipeField.type.rawValue
+        let mask = (CGEventMask(1) << SwipeField.type.rawValue) | (CGEventMask(1) << CGEventType.null.rawValue)
         let callback: CGEventTapCallBack = { proxy, type, event, pointer in
             guard let pointer else { return Unmanaged.passUnretained(event) }
             let engine = Unmanaged<SwipeEngine>.fromOpaque(pointer).takeUnretainedValue()
@@ -219,16 +234,22 @@ final class SwipeEngine: NSObject {
         if let tap { CFMachPortInvalidate(tap) }
         source = nil
         tap = nil
-        queuedEnd = nil
+        // No callback can consume the wake after the tap has been removed.
+        deliverPendingEnd(proxy: nil)
+    }
+
+    private func deliverPendingEnd(proxy: CGEventTapProxy?) {
+        guard let end = pendingEnd else { return }
+        pendingEnd = nil
+        post(end, proxy: proxy)
+    }
+
+    private func wakeForPendingEnd() {
+        if pendingEnd != nil, let releaseWake { post(releaseWake) }
     }
 
     func interrupt(proxy: CGEventTapProxy? = nil) {
-        // A completed landing can also have its end waiting in the HID queue.
-        // Deliver it before the new begin and consume the queued copy on return.
-        if let proxy, let queuedEnd {
-            self.queuedEnd = nil
-            queuedEnd.tapPostEvent(proxy)
-        }
+        if let proxy { deliverPendingEnd(proxy: proxy) }
         releasePlayback(.interrupted, proxy: proxy)
         landing = nil
         gesture = nil
@@ -244,40 +265,57 @@ final class SwipeEngine: NSObject {
         self.playback = nil
         let end = playback.end
         if reason == .arrived || playback.forwardedProgress != playback.startProgress {
-            _ = payload?.update(end, phase: UInt32(playback.kind.rawValue), progress: playback.forwardedProgress,
+            _ = payload?.update(end, phase: playback.kind.rawValue, progress: playback.forwardedProgress,
                                 delta: 0, orientation: playback.orientation, keepVelocity: reason == .interrupted)
         }
-        if proxy == nil { queuedEnd = end }
-        post(end, proxy: proxy)
+        if let proxy {
+            post(end, proxy: proxy)
+        } else {
+            pendingEnd = end
+            wakeForPendingEnd()
+        }
     }
 
     private func receive(_ proxy: CGEventTapProxy, _ type: CGEventType,
                          _ event: CGEvent) -> Unmanaged<CGEvent>? {
         let unchanged = Unmanaged.passUnretained(event)
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            interrupt()
-            if let tap, AXIsProcessTrusted() { CGEvent.tapEnable(tap: tap, enable: true) }
+            if let tap, AXIsProcessTrusted() {
+                CGEvent.tapEnable(tap: tap, enable: true)
+                // A previous wake may have passed while the tap was disabled.
+                wakeForPendingEnd()
+                interrupt()
+            } else {
+                stop()
+                report(.needsAccess)
+            }
             return unchanged
         }
+        if type == .null, event.getIntegerValueField(.eventSourceUserData) == SwipeField.posted {
+            deliverPendingEnd(proxy: proxy)
+            return nil
+        }
         guard type == SwipeField.type,
-              event.getIntegerValueField(SwipeField.kind) == 23,
-              event.getIntegerValueField(SwipeField.axis) == 1 else { return unchanged }
+              event.getIntegerValueField(SwipeField.kind) == SwipeField.dockSwipe else { return unchanged }
         let phase = event.getIntegerValueField(SwipeField.phase)
         if event.getIntegerValueField(.eventSourceUserData) == SwipeField.posted {
             // Frame callbacks post through the HID queue. A physical begin can
             // overtake a frame even after that callback has finished. Both the
             // playback boundary and our event stamps use the same uptime clock.
-            if phase == 2 {
+            if phase == SwipeField.changed {
                 guard let playback, event.timestamp >= playback.startedAt else { return nil }
                 playback.forwardedProgress = event.getDoubleValueField(SwipeField.progress)
-            } else if phase == 4 || phase == 8 {
-                guard event.timestamp == queuedEnd?.timestamp else { return nil }
-                queuedEnd = nil
             }
             return unchanged
         }
+        guard event.getIntegerValueField(SwipeField.axis) == SwipeField.horizontal else {
+            // A vertical Dock gesture, such as Mission Control, must not begin
+            // while the release of a horizontal swipe is still held.
+            if phase == SwipeField.began { interrupt(proxy: proxy) }
+            return unchanged
+        }
         switch phase {
-        case 1:
+        case SwipeField.began:
             let preceding = landing
             interrupt(proxy: proxy)
             if var display = spaces?.display(at: event.location) {
@@ -298,11 +336,12 @@ final class SwipeEngine: NSObject {
                 gesture = Gesture(display: display, rate: rate, location: event.location,
                                   trackingOriginX: trackingOriginX, visited: visited)
             }
-        case 2:
+        case SwipeField.changed:
             gesture?.changed = event.copy()
+            gesture?.changedAt = CACurrentMediaTime()
             if link == nil, let gesture, gesture.rate > 1 { startFrames(on: gesture.display) }
-        case 4, 8:
-            guard let gesture, let kind = LandingKind(rawValue: event.getIntegerValueField(SwipeField.phase)) else {
+        case LandingKind.nextSpace.rawValue, LandingKind.rebound.rawValue:
+            guard let gesture, let kind = LandingKind(rawValue: phase) else {
                 interrupt(proxy: proxy)
                 return unchanged
             }
@@ -370,6 +409,15 @@ final class SwipeEngine: NSObject {
                                 trackingOriginX: gesture.trackingOriginX, originX: originX, targetX: targetX,
                                 orientation: orientation, curve: curves[kind]?[display.screenID] ?? .reference)
         }
+        if let playback {
+            // The release stays held until the landing finishes. Hand it back
+            // even if display link callbacks stop, for example when the display sleeps.
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.landingTimeout + 0.2) { [weak self] in
+                guard let self, self.playback === playback else { return }
+                self.interrupt()
+                self.report(.landingUnconfirmed)
+            }
+        }
         let run = Landing(kind: kind, gesture: gesture, target: target, gap: gap, pitch: pitch,
                           rate: playback != nil ? gesture.rate : 1, approachingAtLift: approaching)
         trace?("release rate=\(run.rate) p=\(progress) v=\(velocity) gap=\(gap) pitch=\(pitch)")
@@ -396,9 +444,10 @@ final class SwipeEngine: NSObject {
     private func advance(_ playback: Playback, for run: Landing, position: Double,
                          deadline: Double, interval: Double, allowRetry: Bool) {
         let now = CACurrentMediaTime()
+        let previousProgress = playback.previous
         let step = playback.step(targetX: position, presentationTime: max(now, deadline) - run.start,
                                  rate: run.rate, elapsed: now - run.start, frameInterval: interval)
-        let progress: Double
+        let progress: Double, delta: Double
         switch step {
         case .awaitingFeedback:
             let delay = min(0.002, interval / 4)
@@ -415,7 +464,10 @@ final class SwipeEngine: NSObject {
                 return
             }
             progress = playback.previous
-        case let .move(next): progress = next
+            delta = 0
+        case let .move(next):
+            progress = next
+            delta = next - previousProgress
         case .wait: return
         case .finish:
             releasePlayback(.arrived)
@@ -427,21 +479,20 @@ final class SwipeEngine: NSObject {
             return
         }
         guard let next = playback.changed.copy(),
-              payload?.update(next, phase: 2, progress: progress, delta: progress - playback.previous,
+              payload?.update(next, phase: SwipeField.changed, progress: progress, delta: delta,
                               orientation: playback.orientation) == true else {
             interrupt()
             report(.playbackUnavailable)
             return
         }
         post(next)
-        playback.previous = progress
     }
 
     @objc private func frame(_ sender: CADisplayLink) {
         guard let run = landing else {
             // Establish the refresh cadence during tracking. A long hold
             // releases the link until movement resumes or the fingers lift.
-            if let changed = gesture?.changed, sender.timestamp - Double(changed.timestamp) * 1e-9 > 0.5 {
+            if let changedAt = gesture?.changedAt, CACurrentMediaTime() - changedAt > 0.5 {
                 sender.invalidate()
                 link = nil
             }
@@ -464,7 +515,7 @@ final class SwipeEngine: NSObject {
         }
 
         let fraction = min(1, max(0, measured))
-        if fraction >= run.samples.last!.progress {
+        if fraction >= run.samples.last?.progress ?? 0 {
             run.samples.append(TailPoint(time: elapsed, progress: fraction))
         }
         if run.kind == .nextSpace, distance > run.gap + max(10, run.pitch * 0.025) { run.movedAway = true }
@@ -483,7 +534,7 @@ final class SwipeEngine: NSObject {
         } else {
             run.settledAt = nil
         }
-        if elapsed > 1.8 {
+        if elapsed > Self.landingTimeout {
             interrupt()
             report(.landingUnconfirmed)
         }
@@ -497,11 +548,9 @@ final class SwipeEngine: NSObject {
         } else if run.approachingAtLift {
             feedback.confirmedNativeLanding(on: id, gap: run.gap, samples: run.samples)
         }
-        if run.rate == 1, run.approachingAtLift, settled > 0.10, settled < 1.6 {
-            let points = run.samples.filter { $0.time < settled && $0.progress < 1 }
-            if let curve = TailCurve(points + [TailPoint(time: settled, progress: 1)]) {
-                curves[run.kind, default: [:]][run.display.screenID] = curve
-            }
+        if run.rate == 1, run.approachingAtLift,
+           let curve = TailCurve(learnedFrom: run.samples, settledAt: settled) {
+            curves[run.kind, default: [:]][run.display.screenID] = curve
         }
         if let t90 = TailPoint.time(at: 0.90, in: run.samples) {
             let ms = Int((t90 * 1000).rounded())

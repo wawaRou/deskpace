@@ -77,9 +77,11 @@ private final class MotionProbe {
         return abs(offset)
     }
 
-    func swipe(_ direction: Double, end: Double, interval: Double = 0.0085, hold: Double = 0.025) {
+    func swipe(_ direction: Double, end: Double, interval: Double = 0.0085, hold: Double = 0.025,
+               afterBegin: (() -> Void)? = nil) {
         var previous = direction * 0.005
         input.send(at: point, phase: 1, progress: previous, delta: previous)
+        afterBegin?()
         for i in 1...15 {
             pump(for: interval)
             let p = direction * end * Double(i) / 15
@@ -117,7 +119,7 @@ private final class MotionProbe {
         var confirmation = LandingConfirmation()
         var landed = false
         var nextCurrentCheck = 0.0
-        while CACurrentMediaTime() - start < 1.8 {
+        while CACurrentMediaTime() - start < SwipeEngine.landingTimeout {
             pump(for: pollInterval)
             let t = CACurrentMediaTime() - start
             let distance = try self.distance(to: goal)
@@ -201,9 +203,18 @@ private final class MotionProbe {
             _ = try leg(sign, to: neighbor, rate: 1, clicks: nil)
             let baseline = try leg(-sign, to: home, rate: 1, clicks: nil)
             for rate in [2.9, 4.0] { try rapidReturn(rate: rate, nativeT90: baseline.t90) }
+            try delayedReleaseWake()
             return
         }
-        if CommandLine.arguments.contains("--chain") { try rapidAdvance(from: route.start); return }
+        if CommandLine.arguments.contains("--rapid-sequence") {
+            guard display.spaces.count >= 3 else { throw Failure("连续八划需要三个相邻空间") }
+            try checkRapidSequence(rates: [2.9, 4])
+            return
+        }
+        if CommandLine.arguments.contains("--chain") {
+            for rate in [2.9, 3.0, 4.0] { try rapidAdvance(from: route.start, rate: rate) }
+            return
+        }
         if CommandLine.arguments.contains("--cadence") {
             defer {
                 if spaces.isCurrent(neighbor, on: display) { _ = try? leg(-sign, to: home, rate: 1, clicks: nil) }
@@ -314,7 +325,7 @@ private final class MotionProbe {
 
     // Two swipes in the same direction, with the middle Space still moving
     // when tracking starts on the second swipe.
-    func rapidAdvance(from start: Int) throws {
+    func rapidAdvance(from start: Int, rate: Double = 3) throws {
         let order = display.spaces
         let step = Int(sign)
         let middle = start + step
@@ -325,7 +336,7 @@ private final class MotionProbe {
             let baseline = try leg(sign, to: order[finish], rate: 1, clicks: nil)
             try move(to: start)
             let eventStart = handoff.events.endIndex
-            engine.rate = 3
+            engine.rate = rate
             swipe(sign, end: 0.22)
             let gap = try distance(to: order[middle])
             let lift = CACurrentMediaTime()
@@ -336,10 +347,10 @@ private final class MotionProbe {
             let remaining = try distance(to: order[middle])
             guard remaining >= gap * 0.40, remaining <= gap * 0.65,
                   spaces.isCurrent(order[start], on: display) else { throw Failure("未覆盖中间桌面仍在移动的时段") }
-            let second = try leg(sign, to: order[finish], rate: 3, clicks: nil)
-            try second.timing.checkRate(native: baseline.t90, rate: 3)
+            let second = try leg(sign, to: order[finish], rate: rate, clicks: nil)
+            try second.timing.checkRate(native: baseline.t90, rate: rate)
             try handoff.verify([.begin, .postedEnd(4), .begin, .postedEnd(4)], since: eventStart)
-            print("连续同向切换三个空间，第二程原速 / 3× T90 \(Int(baseline.t90 * 1000)) / \(Int(second.t90 * 1000)) ms")
+            print("连续同向切换三个空间，第二程原速 / \(rate)× T90 \(Int(baseline.t90 * 1000)) / \(Int(second.t90 * 1000)) ms")
         } catch {
             pump(for: 1.8)
             try move(to: display.origin)
@@ -373,7 +384,7 @@ private final class MotionProbe {
                     let start = CACurrentMediaTime()
                     var landing = LandingConfirmation()
                     var arrived = false
-                    while CACurrentMediaTime() - start < 1.8 {
+                    while CACurrentMediaTime() - start < SwipeEngine.landingTimeout {
                         pump(for: 0.004)
                         if landing.observe(at: CACurrentMediaTime() - start, distance: try distance(to: goal),
                                            current: spaces.isCurrent(goal, on: display)) {
@@ -395,11 +406,11 @@ private final class MotionProbe {
         print("左右边界在各倍率下均由系统回弹并稳定归位")
     }
 
-    private func checkRapidSequence() throws {
+    private func checkRapidSequence(rates: [Double] = [1.99, 2.9, 4]) throws {
         let start = route.step > 0 ? 0 : display.spaces.count - 1
         do {
             try move(to: start)
-            for rate in [1.99, 2.90, 4.0] {
+            for rate in rates {
                 for remainingFraction in [0.45, 0.20] {
                     var index = start
                     let eventStart = handoff.events.endIndex
@@ -447,6 +458,50 @@ private final class MotionProbe {
         }
         try move(to: display.origin)
         print("三桌面连续八次切换的交接顺序和最终落点均正确")
+    }
+
+    // Lose the wake exactly as if it had bypassed the engine's disabled tap.
+    // The next begin must deliver the held end; replaying the wake must be harmless.
+    private func delayedReleaseWake() throws {
+        final class Capture { var wake: CGEvent? }
+        let capture = Capture()
+        guard let tap = CGEvent.tapCreate(tap: .cghidEventTap, place: .headInsertEventTap,
+                options: .defaultTap, eventsOfInterest: CGEventMask(1) << CGEventType.null.rawValue,
+                callback: { _, type, event, context in
+                    if type == .null, event.getIntegerValueField(.eventSourceUserData) == SwipeField.posted,
+                       let context {
+                        let capture = Unmanaged<Capture>.fromOpaque(context).takeUnretainedValue()
+                        capture.wake = event.copy()
+                        return nil
+                    }
+                    return Unmanaged.passUnretained(event)
+                }, userInfo: Unmanaged.passUnretained(capture).toOpaque()),
+              let source = CFMachPortCreateRunLoopSource(nil, tap, 0) else {
+            throw Failure("无法模拟收尾唤醒事件延迟")
+        }
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        defer { CFMachPortInvalidate(tap); CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
+        let first = handoff.events.endIndex
+        engine.rate = 4
+        swipe(sign, end: 0.22)
+        input.send(at: point, phase: 4, progress: sign * 0.22, delta: sign * 0.01, velocity: sign * 3.2)
+        let deadline = CACurrentMediaTime() + 1
+        while capture.wake == nil && CACurrentMediaTime() < deadline { pump(for: 0.002) }
+        CGEvent.tapEnable(tap: tap, enable: false)
+        guard let wake = capture.wake else { throw Failure("未捕获收尾唤醒事件") }
+        try handoff.verify([.begin], since: first)
+        // Send a real begin, followed by the stale wake, then complete the return swipe.
+        swipe(-sign, end: 0.22) {
+            pump(for: 0.015)
+            wake.post(tap: .cghidEventTap)
+        }
+        input.send(at: point, phase: 4, progress: -sign * 0.22, delta: -sign * 0.01, velocity: -sign * 3.2)
+        pump(for: 1)
+        try handoff.verify([.begin, .postedEnd(4), .begin, .postedEnd(4)], since: first)
+        guard spaces.isCurrent(home, on: display), try distance(to: home) <= 2 else {
+            throw Failure("延迟的收尾唤醒事件影响了回程落点")
+        }
+        print("收尾唤醒延迟到下一划之后，结束事件仍按序各送达一次")
     }
 
     func rapidReturn(rate: Double, nativeT90: Double) throws {

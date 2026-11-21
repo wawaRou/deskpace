@@ -4,7 +4,9 @@ import Foundation
 
 // Observed on physical, horizontal four-finger swipes. The CGEvent carries
 // absolute progress as a Double, a per-update delta, and two phase fields.
+// None of these numbers are public. Tests/GestureFixture.swift keeps its own copy.
 enum SwipeField {
+    /// Quartz event type of Dock gestures.
     static let type = CGEventType(rawValue: 30)!
     static let kind = CGEventField(rawValue: 110)!
     static let axis = CGEventField(rawValue: 123)!
@@ -15,7 +17,29 @@ enum SwipeField {
     static let speedX = CGEventField(rawValue: 130)!
     static let phase = CGEventField(rawValue: 132)!
     static let companionPhase = CGEventField(rawValue: 134)!
+
+    /// `kind` of a Dock swipe, the same number as its IOHIDEvent type.
+    static let dockSwipe: Int64 = 23
+    /// `axis` of a left or right swipe.
+    static let horizontal: Int64 = 1
+    /// `phase` values before release. The two terminal values are `LandingKind`.
+    static let began: Int64 = 1
+    static let changed: Int64 = 2
+    /// Source user data on events DeskPace posts itself: "SWDT" in ASCII,
+    /// from the project's earlier name. It never leaves this process.
     static let posted: Int64 = 0x53574454
+}
+
+/// IOHIDEvent fields are addressed as (event type << 16) | field index.
+private enum HIDField {
+    static let dockSwipe: UInt32 = 23
+    static let progress = dockSwipe << 16 | 2
+    /// Despite its name, this carries the per-update delta of a swipe.
+    static let positionX = dockSwipe << 16 | 3
+    static let positionY = dockSwipe << 16 | 4
+    static let velocity: UInt32 = 9
+    static let velocityX = velocity << 16
+    static let velocityY = velocity << 16 | 1
 }
 
 /// Keep the Quartz event and its attached trackpad swipe in agreement.
@@ -66,31 +90,31 @@ final class SwipePayload {
     deinit { for library in libraries.reversed() { dlclose(library) } }
 
     func orientation(of event: CGEvent, progress: Double) -> Double? {
-        guard let source = read(event)?.takeRetainedValue(), kind(source) == 23,
+        guard let source = read(event)?.takeRetainedValue(), kind(source) == HIDField.dockSwipe,
               abs(progress) > 0.0001 else { return nil }
-        let raw = getFloat(source, (23 << 16) + 2)
+        let raw = getFloat(source, HIDField.progress)
         guard raw.isFinite, abs(abs(raw) - abs(progress)) < 0.001, raw != 0 else { return nil }
         return raw.sign == progress.sign ? 1 : -1
     }
 
-    func update(_ event: CGEvent, phase: UInt32, progress: Double, delta: Double,
+    /// Rewrite both copies of the swipe. `keepVelocity` leaves the lift speed in
+    /// an interrupted release, so macOS can finish that landing at its own pace.
+    func update(_ event: CGEvent, phase: Int64, progress: Double, delta: Double,
                 orientation: Double, keepVelocity: Bool = false) -> Bool {
-        guard let source = read(event)?.takeRetainedValue(), kind(source) == 23,
+        guard let source = read(event)?.takeRetainedValue(), kind(source) == HIDField.dockSwipe,
               let copy = clone(nil, source)?.takeRetainedValue() else { return false }
-        let dockSwipe: UInt32 = 23 << 16
-        setPhase(copy, phase)
+        setPhase(copy, UInt32(phase))
         setTime(copy, mach_absolute_time())
-        setFloat(copy, dockSwipe + 2, orientation * progress)
-        setFloat(copy, dockSwipe + 3, orientation * delta)
-        setFloat(copy, dockSwipe + 4, 0)
-        if !keepVelocity, let velocity = child(copy, 9, 0)?.takeUnretainedValue() {
-            let velocityX: UInt32 = 9 << 16
-            setFloat(velocity, velocityX, 0)
-            setFloat(velocity, velocityX + 1, 0)
+        setFloat(copy, HIDField.progress, orientation * progress)
+        setFloat(copy, HIDField.positionX, orientation * delta)
+        setFloat(copy, HIDField.positionY, 0)
+        if !keepVelocity, let velocity = child(copy, HIDField.velocity, 0)?.takeUnretainedValue() {
+            setFloat(velocity, HIDField.velocityX, 0)
+            setFloat(velocity, HIDField.velocityY, 0)
         }
         attach(event, copy)
-        event.setIntegerValueField(SwipeField.phase, value: Int64(phase))
-        event.setIntegerValueField(SwipeField.companionPhase, value: Int64(phase))
+        event.setIntegerValueField(SwipeField.phase, value: phase)
+        event.setIntegerValueField(SwipeField.companionPhase, value: phase)
         event.setDoubleValueField(SwipeField.progress, value: progress)
         event.setDoubleValueField(SwipeField.deltaX, value: delta)
         event.setDoubleValueField(SwipeField.deltaY, value: 0)

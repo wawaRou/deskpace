@@ -20,16 +20,26 @@ enum AppLanguage: String {
         case .needsAccess: return text("等待辅助功能授权 · 当前为系统原速", "Grant Accessibility access to adjust the speed.")
         case .tapUnavailable: return text("系统尚未允许调节手势", "macOS hasn’t allowed swipe adjustments.")
         case .ready: return text("等待四指横移", "Ready for a four-finger swipe.")
-        case .atEdge: return text("已到桌面边缘 · 系统原速回弹", "At the last desktop. Bouncing back at system speed.")
+        case .atEdge: return text("已到桌面边缘 · 系统原速回弹", "At the edge. Bouncing back at system speed.")
         case .feedbackTimeout: return text("未收到桌面位移反馈，本次由系统收尾", "Desktop position unavailable. macOS finished the swipe.")
         case .playbackUnavailable: return text("当前系统未接受手势调速", "macOS couldn’t apply the selected speed.")
         case .nativeRebound: return text("已回到原桌面 · 系统原速回弹", "Returned to the starting desktop at system speed.")
         case .landingUnconfirmed: return text("本次未确认到达目标桌面", "Couldn’t confirm arrival at the target desktop.")
         case let .completed(rebound, rate, ms):
-            let speed = rate == 1 ? text("系统原速", "system speed") : "\(rate.formatted(.number.precision(.fractionLength(0...2))))×"
+            let speed = rate == 1 ? text("系统原速", "system speed") : rate.rateText
             let action = rebound ? text("回弹", "bounce") : text("切换", "switch")
             return text("上次\(action) \(speed) · 走完 90% 位移用了 \(ms) 毫秒",
                         "Last \(action) at \(speed) · 90% of the distance in \(ms) ms")
         }
+    }
+}
+
+extension Double {
+    /// A speed such as 1×, 1.5× or 2.25×.
+    var rateText: String {
+        let style = FloatingPointFormatStyle<Double>.number.precision(.fractionLength(0...2))
+        let number = formatted(style)
+        // Older continuous sliders could save a speed just above native speed.
+        return (self > 1 && number == 1.0.formatted(style) ? ">" : "") + number + "×"
     }
 }
