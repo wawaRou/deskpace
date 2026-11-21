@@ -13,7 +13,7 @@ DeskPace 是一款 macOS 菜单栏工具。四指切换桌面时，桌面照常�
 1. 下载 `DeskPace-<版本号>.zip`，解压后将 `DeskPace.app` 拖入「应用程序」。[GitHub Releases](https://github.com/wawaRou/deskpace/releases/latest)
 2. 打开 DeskPace，点击菜单栏图标。如果面板提示需要权限，点「授权辅助功能…」，在「系统设置 → 隐私与安全性 → 辅助功能」中启用 DeskPace。
 
-v0.1.6 下载包使用临时签名，未经 Apple 公证。首次打开时，macOS 可能会阻止启动。
+v0.1.7 下载包使用临时签名，未经 Apple 公证。首次打开时，macOS 可能会阻止启动。
 
 ## 调整速度
 

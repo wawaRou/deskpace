@@ -13,7 +13,7 @@ You need macOS 26 or later and a trackpad with four-finger desktop switching ena
 1. Download `DeskPace-<version>.zip`, unzip it, and drag `DeskPace.app` into Applications. [GitHub Releases](https://github.com/wawaRou/deskpace/releases/latest)
 2. Open DeskPace and click its menu bar icon. If prompted, click **授权辅助功能…** (Grant Accessibility Access) and enable DeskPace under **Privacy & Security → Accessibility** in System Settings.
 
-The v0.1.6 download uses an ad hoc signature. Apple has not notarized it, so macOS may block the first launch.
+The v0.1.7 download uses an ad hoc signature. Apple has not notarized it, so macOS may block the first launch.
 
 ## Set the speed
 
