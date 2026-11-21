@@ -108,9 +108,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         self.item = item
         if let button = item.button {
-            button.image = NSImage(systemSymbolName: "rectangle.2.swap", accessibilityDescription: "桌面切换速度")
-                ?? NSImage(systemSymbolName: "arrow.left.and.right", accessibilityDescription: "桌面切换速度")
+            if let url = Bundle.main.url(forResource: "logo-menubar", withExtension: "svg"),
+               let logo = NSImage(contentsOf: url), logo.size.width > 0 {
+                let width: CGFloat = 22
+                logo.size = NSSize(width: width, height: width * logo.size.height / logo.size.width)
+                button.image = logo
+            } else {
+                button.image = NSImage(systemSymbolName: "rectangle.2.swap", accessibilityDescription: nil)
+            }
             button.image?.isTemplate = true
+            button.setAccessibilityLabel("桌面切换速度")
             button.toolTip = "Switch Desktop · 桌面切换速度"
             button.target = self
             button.action = #selector(togglePanel)
