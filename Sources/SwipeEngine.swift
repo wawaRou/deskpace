@@ -7,10 +7,11 @@ private struct Gesture {
     let rate: Double
     let location: CGPoint
     let trackingOriginX: Double
+    let visited: ClosedRange<Int>
     var changed: CGEvent?
 }
 
-private enum LandingKind: Int64 {
+enum LandingKind: Int64 {
     case nextSpace = 4
     case rebound = 8
 }
@@ -23,13 +24,18 @@ private final class Landing {
     let pitch: Double
     let start: CFTimeInterval
     let rate: Double
+    let visited: ClosedRange<Int>
+    let approachingAtLift: Bool
     var samples = [TailPoint(time: 0, progress: 0)]
     var settledAt: Double?
     var movedAway = false
 
-    init(kind: LandingKind, display: SwipeDisplay, target: UInt64, gap: Double, pitch: Double, rate: Double) {
+    init(kind: LandingKind, gesture: Gesture, target: UInt64, gap: Double, pitch: Double,
+         rate: Double, approachingAtLift: Bool) {
         self.kind = kind
-        self.display = display
+        self.display = gesture.display
+        self.visited = gesture.visited
+        self.approachingAtLift = approachingAtLift
         self.target = target
         self.gap = gap
         self.pitch = pitch
@@ -38,9 +44,25 @@ private final class Landing {
     }
 }
 
-private final class Playback {
+/// Time on the landing curve. Advance only when the preceding tracking update
+/// has been acknowledged, so a late callback cannot merge several frame steps.
+struct PlaybackClock {
+    private var time = 0.0
+
+    mutating func advance(toward target: Double, frameInterval: Double) -> Double {
+        guard frameInterval > 0, frameInterval.isFinite else {
+            time = max(time, target)
+            return time
+        }
+        let budget = frameInterval * (time == 0 ? 1 : 1.03)
+        time = max(time, min(target, time + budget))
+        return time
+    }
+}
+
+final class Playback {
     enum Step {
-        case wait, finish, unresponsive
+        case wait, finish, unresponsive, awaitingFeedback
         case move(Double)
     }
 
@@ -56,9 +78,11 @@ private final class Playback {
     let startProgress: Double
     let orientation: Double
     let curve: TailCurve
-    private let targetAtLift: Double
+    private let trackingAgeAtLift: Double
+    private var targetAtStart: Double
     private var pointsPerUnit: Double
     private var pending: Pending?
+    private var clock = PlaybackClock()
     var previous: Double
 
     init?(kind: LandingKind, changed: CGEvent, end: CGEvent, trackingOriginX: Double,
@@ -73,7 +97,9 @@ private final class Playback {
         self.changed = changed
         self.end = end
         self.startProgress = progress
-        targetAtLift = targetX
+        trackingAgeAtLift = end.timestamp >= changed.timestamp
+            ? Double(end.timestamp - changed.timestamp) * 1e-9 : 0
+        targetAtStart = targetX
         pointsPerUnit = abs(tracked / progress)
         self.orientation = orientation
         self.previous = progress
@@ -82,15 +108,32 @@ private final class Playback {
 
     /// Match compositor feedback to one outstanding tracking position. Both the
     /// conversion and the decision to release depend on the real Space transform.
-    func step(targetX: Double, fraction: Double, elapsed: Double, frameInterval: Double) -> Step {
+    func step(targetX: Double, presentationTime: Double, rate: Double, elapsed: Double, frameInterval: Double) -> Step {
         if abs(targetX) <= 1 { return .finish }
+        if previous == startProgress, targetX == targetAtStart,
+           trackingAgeAtLift + elapsed < frameInterval,
+           changed.getDoubleValueField(SwipeField.deltaX) != 0 {
+            // The last physical delta can still arrive after this callback.
+            // In a cancellation it moves against our first step, making a
+            // delivered event look unacknowledged for the entire timeout.
+            return .wait
+        }
+        // A physical changed event can reach the compositor after lift. Until
+        // we send our first position, that travel belongs to finger tracking.
+        if previous == startProgress, targetX != targetAtStart {
+            let tracked = pointsPerUnit * startProgress + (targetX - targetAtStart)
+            if tracked * startProgress > 0, abs(tracked) > 2, targetX * targetAtStart > 0 {
+                pointsPerUnit = tracked / startProgress
+                targetAtStart = targetX
+            }
+        }
         if let pending {
             let displacement = targetX - pending.targetBefore
             if displacement * pending.expectedStep > 0, abs(displacement) >= 0.75 {
                 // Measure from lift onward. A second gesture can begin while its
                 // starting desktop is still moving underneath it.
                 let units = previous - startProgress
-                let travel = targetX - targetAtLift
+                let travel = targetX - targetAtStart
                 if abs(travel) >= 4, travel * units > 0, abs(units) > 0.001 {
                     pointsPerUnit = travel / units
                 }
@@ -98,13 +141,15 @@ private final class Playback {
                 if elapsed - pending.issued > max(0.085, frameInterval * 4) { return .unresponsive }
                 // An update can be dropped or coalesced. Repeat the absolute
                 // position with zero delta until the compositor acknowledges it.
-                return .move(previous)
+                return .awaitingFeedback
             }
             self.pending = nil
         }
-        let step = targetAtLift * (1 - fraction) - targetX
+        let playbackTime = clock.advance(toward: presentationTime, frameInterval: frameInterval)
+        let fraction = curve.progress(after: playbackTime, rate: rate)
+        let step = targetAtStart * (1 - fraction) - targetX
         // Wait when the compositor is already ahead of this frame on the curve.
-        if targetX * targetAtLift > 0, step * targetX > 0 { return .wait }
+        if targetX * targetAtStart > 0, step * targetX > 0 { return .wait }
         guard abs(step) >= 0.5 else { return .wait }
         let progress = previous + step / pointsPerUnit
         guard progress.isFinite else { return .unresponsive }
@@ -206,21 +251,25 @@ final class SwipeEngine: NSObject {
             interrupt(proxy: proxy)
             if var display = spaces?.display(at: event.location) {
                 var trackingOriginX = 0.0
+                var visited = display.origin...display.origin
                 // Current Space can still name the old desktop when the next
                 // physical gesture already tracks from the preceding destination.
                 if let preceding, preceding.display.screenID == display.screenID,
                    preceding.display.identifier == display.identifier,
                    preceding.display.spaces == display.spaces,
                    let index = display.spaces.firstIndex(of: preceding.target),
-                   display.origin == preceding.display.origin || display.origin == index,
+                   preceding.visited.contains(display.origin) || display.origin == index,
                    let offset = spaces?.offset(of: preceding.target) {
                     display.origin = index
                     trackingOriginX = offset
+                    visited = min(preceding.visited.lowerBound, index)...max(preceding.visited.upperBound, index)
                 }
-                gesture = Gesture(display: display, rate: rate, location: event.location, trackingOriginX: trackingOriginX)
+                gesture = Gesture(display: display, rate: rate, location: event.location,
+                                  trackingOriginX: trackingOriginX, visited: visited)
             }
         case 2:
             gesture?.changed = event.copy()
+            if link == nil, let gesture, gesture.rate > 1 { startFrames(on: gesture.display) }
         case 4, 8:
             guard let gesture, let kind = LandingKind(rawValue: event.getIntegerValueField(SwipeField.phase)) else {
                 interrupt(proxy: proxy)
@@ -232,6 +281,7 @@ final class SwipeEngine: NSObject {
                 // last real position and keep the release for the final frame.
                 return nil
             }
+            if landing == nil { interrupt() }
         default:
             break
         }
@@ -245,20 +295,32 @@ final class SwipeEngine: NSObject {
         let home = display.spaces[display.origin]
         guard let originX = spaces?.offset(of: home) else { return false }
         let target: UInt64, targetX: Double
+        let approaching: Bool
         switch kind {
         case .nextSpace:
             guard progress.isFinite, velocity.isFinite, abs(progress) > 0.001,
                   let neighbor = display.neighbor(in: progress), let x = spaces?.offset(of: neighbor),
-                  display.matchesSpacePitch(abs(originX - x)), x * progress < 0 else { return false }
+                  display.matchesSpacePitch(abs(originX - x)) else { return false }
             // In a rapid A → B → C switch, B can still be moving toward the
             // center when the second swipe begins. Measure approach to C from
             // that starting position, which can be more than one Space away.
             let travel = originX - gesture.trackingOriginX
             let targetAtStart = x - travel
-            guard abs(x) < abs(targetAtStart) else { return false }
+            approaching = x * progress < 0 && abs(x) < abs(targetAtStart)
+            // During A → B → C → B the reverse swipe can start before B
+            // crosses center. Let macOS resolve that leg, keeping its target
+            // for the next handoff without learning its atypical curve.
+            guard approaching || gesture.trackingOriginX != 0 else { return false }
             target = neighbor
             targetX = x
         case .rebound:
+            approaching = true
+            // At an outer edge macOS rubber-bands the current Space. Its
+            // displacement does not follow the linear two-Space tracking scale.
+            guard display.neighbor(in: originX) != nil else {
+                if abs(originX) > 1 { report("已到桌面边缘 · 系统原速回弹") }
+                return false
+            }
             target = home
             targetX = originX
         }
@@ -268,7 +330,7 @@ final class SwipeEngine: NSObject {
 
         // The terminal phase distinguishes a switch from a cancellation even
         // if the fingers paused or reversed direction before lifting.
-        if gesture.rate > 1, feedback.canAccelerate(on: display.screenID),
+        if approaching, gesture.rate > 1, feedback.canAccelerate(on: display.screenID),
            let changed = gesture.changed, let savedEnd = end.copy(),
            let orientation = payload?.orientation(of: changed, progress: changed.getDoubleValueField(SwipeField.progress)) {
             changed.location = gesture.location
@@ -277,16 +339,20 @@ final class SwipeEngine: NSObject {
                                 trackingOriginX: gesture.trackingOriginX, originX: originX, targetX: targetX,
                                 orientation: orientation, curve: curves[kind]?[display.screenID] ?? .reference)
         }
-        let run = Landing(kind: kind, display: display, target: target, gap: gap, pitch: pitch,
-                          rate: playback != nil ? gesture.rate : 1)
+        let run = Landing(kind: kind, gesture: gesture, target: target, gap: gap, pitch: pitch,
+                          rate: playback != nil ? gesture.rate : 1, approachingAtLift: approaching)
         trace?("release rate=\(run.rate) p=\(progress) v=\(velocity) gap=\(gap) pitch=\(pitch)")
         landing = run
+        if link == nil { startFrames(on: display) }
+        return playback != nil
+    }
+
+    private func startFrames(on display: SwipeDisplay) {
         let link = display.screen.displayLink(target: self, selector: #selector(frame(_:)))
         let maximum = Float(max(1, display.screen.maximumFramesPerSecond))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: min(60, maximum), maximum: maximum, preferred: maximum)
         link.add(to: .main, forMode: .common)
         self.link = link
-        return playback != nil
     }
 
     private func post(_ event: CGEvent, proxy: CGEventTapProxy? = nil) {
@@ -296,8 +362,61 @@ final class SwipeEngine: NSObject {
         else { event.post(tap: .cghidEventTap) }
     }
 
+    private func advance(_ playback: Playback, for run: Landing, position: Double,
+                         deadline: Double, interval: Double, allowRetry: Bool) {
+        let now = CACurrentMediaTime()
+        let step = playback.step(targetX: position, presentationTime: max(now, deadline) - run.start,
+                                 rate: run.rate, elapsed: now - run.start, frameInterval: interval)
+        let progress: Double
+        switch step {
+        case .awaitingFeedback:
+            let delay = min(0.002, interval / 4)
+            if allowRetry, delay > 0, now + delay < deadline {
+                // The previous position can become visible just after the
+                // callback. Recheck once before this presentation deadline.
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let self, self.landing === run, self.playback === playback,
+                          self.link?.targetTimestamp == deadline, CACurrentMediaTime() < deadline,
+                          let current = self.spaces?.offset(of: run.target) else { return }
+                    self.advance(playback, for: run, position: current, deadline: deadline,
+                                 interval: interval, allowRetry: false)
+                }
+                return
+            }
+            progress = playback.previous
+        case let .move(next): progress = next
+        case .wait: return
+        case .finish:
+            releasePlayback(.arrived)
+            return
+        case .unresponsive:
+            feedback.missedFeedback(on: run.display.screenID)
+            interrupt()
+            report("未收到桌面位移反馈，本次由系统收尾")
+            return
+        }
+        guard let next = playback.changed.copy(),
+              payload?.update(next, phase: 2, progress: progress, delta: progress - playback.previous,
+                              orientation: playback.orientation) == true else {
+            interrupt()
+            report("当前系统未接受手势调速")
+            return
+        }
+        post(next)
+        playback.previous = progress
+    }
+
     @objc private func frame(_ sender: CADisplayLink) {
-        guard let run = landing, let position = spaces?.offset(of: run.target) else {
+        guard let run = landing else {
+            // Establish the refresh cadence during tracking. A long hold
+            // releases the link until movement resumes or the fingers lift.
+            if let changed = gesture?.changed, sender.timestamp - Double(changed.timestamp) * 1e-9 > 0.5 {
+                sender.invalidate()
+                link = nil
+            }
+            return
+        }
+        guard let position = spaces?.offset(of: run.target) else {
             interrupt()
             return
         }
@@ -308,29 +427,9 @@ final class SwipeEngine: NSObject {
         let measured = 1 - distance / run.gap
         if let trace { trace("frame t=\(elapsed) gap=\(distance)") }
         if let playback {
-            let fraction = playback.curve.progress(after: max(elapsed, sender.targetTimestamp - run.start), rate: run.rate)
-            switch playback.step(targetX: position, fraction: fraction, elapsed: elapsed,
-                                 frameInterval: frameInterval) {
-            case .wait:
-                break
-            case .unresponsive:
-                feedback.missedFeedback(on: run.display.screenID)
-                interrupt()
-                report("未收到桌面位移反馈，本次由系统收尾")
-                return
-            case let .move(progress):
-                guard let next = playback.changed.copy(),
-                      payload?.update(next, phase: 2, progress: progress, delta: progress - playback.previous,
-                                      orientation: playback.orientation) == true else {
-                    interrupt()
-                    report("当前系统未接受手势调速")
-                    return
-                }
-                post(next)
-                playback.previous = progress
-            case .finish:
-                releasePlayback(.arrived)
-            }
+            advance(playback, for: run, position: position, deadline: sender.targetTimestamp,
+                    interval: frameInterval, allowRetry: true)
+            guard landing === run else { return }
         }
 
         let fraction = min(1, max(0, measured))
@@ -364,10 +463,10 @@ final class SwipeEngine: NSObject {
         let id = run.display.screenID
         if run.rate > 1 {
             feedback.confirmedPlayback(on: id)
-        } else {
+        } else if run.approachingAtLift {
             feedback.confirmedNativeLanding(on: id, gap: run.gap, samples: run.samples)
         }
-        if run.rate == 1, settled > 0.10, settled < 1.6 {
+        if run.rate == 1, run.approachingAtLift, settled > 0.10, settled < 1.6 {
             let points = run.samples.filter { $0.time < settled && $0.progress < 1 }
             if let curve = TailCurve(points + [TailPoint(time: settled, progress: 1)]) {
                 curves[run.kind, default: [:]][run.display.screenID] = curve

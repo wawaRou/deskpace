@@ -1,3 +1,5 @@
+import CoreGraphics
+
 // Regression cases shared by CI and the live probe, without an event tap.
 func runOfflineChecks() throws {
     func require(_ condition: Bool, _ message: String) throws {
@@ -19,6 +21,104 @@ func runOfflineChecks() throws {
     try require(!landing.observe(at: 2.2, distance: 0, current: false), "错误空间仍通过")
     try require(!landing.observe(at: 2.3, distance: 1, current: true), "沿用了失效的到位观测")
     try require(landing.observe(at: 2.4, distance: 0, current: true), "已到位的样本未通过")
+
+    let curve = TailCurve.reference
+    // The final physical changed event is delivered before lift, but its last
+    // 59 points can reach the compositor after lift. Replay both directions.
+    let interval = 1.0 / 120
+    for sign in [-1.0, 1.0] {
+        guard let changed = CGEvent(source: nil), let end = CGEvent(source: nil) else {
+            throw Failure("无法构造长划用例")
+        }
+        let start = 0.85 * sign
+        changed.type = SwipeField.type
+        changed.setDoubleValueField(SwipeField.progress, value: start)
+        guard let playback = Playback(kind: .nextSpace, changed: changed, end: end, trackingOriginX: 0,
+                                      originX: 834 * sign, targetX: -742 * sign, orientation: 1, curve: curve) else {
+            throw Failure("无法启动长划回放")
+        }
+        guard case let .move(progress) = playback.step(targetX: -683 * sign, presentationTime: interval,
+                                                       rate: 1.99, elapsed: interval, frameInterval: interval) else {
+            throw Failure("手指最后一笔位移延后显示，收尾第一帧停住")
+        }
+        let measuredTravel = (progress - start) * 893 / 0.85 * sign
+        let expectedTravel = 683 * curve.progress(after: interval, rate: 1.99)
+        try require(abs(measuredTravel - expectedTravel) < 0.01, "收尾第一步仍按滞后的位移换算")
+        playback.previous = progress
+        let secondDeadline = 2 * interval
+        guard case .awaitingFeedback = playback.step(targetX: -683 * sign, presentationTime: secondDeadline,
+                                                     rate: 1.99, elapsed: interval, frameInterval: interval),
+              case let .move(second) = playback.step(targetX: (-683 + measuredTravel) * sign,
+                                                     presentationTime: secondDeadline, rate: 1.99,
+                                                     elapsed: interval + 0.002, frameInterval: interval) else {
+            throw Failure("同一刷新期限内收到位置反馈后未推进下一步")
+        }
+        let secondTravel = (second - start) * 893 / 0.85 * sign
+        try require(abs(secondTravel - 683 * curve.progress(after: secondDeadline, rate: 1.99)) < 0.01,
+                    "同一帧重读位置时重复推进了播放时钟")
+
+        changed.timestamp = 1_000_000_000
+        end.timestamp = changed.timestamp + 200_000
+        changed.setDoubleValueField(SwipeField.deltaX, value: sign * 0.056)
+        guard let cancel = Playback(kind: .rebound, changed: changed, end: end, trackingOriginX: 0,
+                                    originX: 834 * sign, targetX: 834 * sign, orientation: 1, curve: curve),
+              case .wait = cancel.step(targetX: 834 * sign, presentationTime: interval,
+                                       rate: 4, elapsed: 0.002, frameInterval: interval),
+              case let .move(returnProgress) = cancel.step(targetX: 893 * sign, presentationTime: 2 * interval,
+                                                           rate: 4, elapsed: 0.010, frameInterval: interval) else {
+            throw Failure("回弹与尚未显示的最后一笔跟手位移冲突")
+        }
+        let firstReturn = (start - returnProgress) * 893 / 0.85 * sign
+        try require(abs(firstReturn - 893 * curve.progress(after: interval, rate: 4)) < 0.01,
+                    "回弹把等待最后一笔跟手位移的时间合并到第一帧")
+    }
+    let nativeT90 = TailPoint.time(at: 0.9, in: curve.points)!
+    let refresh = 1.0 / 120
+    let nativeFirst = curve.progress(after: refresh, rate: 1)
+    for rate in [1.5, 2, 2.5, 3, 3.5, 4] {
+        let first = curve.progress(after: refresh, rate: rate)
+        try require(first < 1.65 * nativeFirst, "松手后第一个刷新周期的位移远大于原速")
+    }
+    for hz in [60.0, 120.0] {
+        let interval = 1 / hz
+        var clock = PlaybackClock()
+        let first = clock.advance(toward: 2 * interval, frameInterval: interval)
+        try require(abs(first - interval) < 1e-9, "首次回调迟到导致合并两帧位移")
+        let late = clock.advance(toward: 5 * interval, frameInterval: interval)
+        try require(late > first + interval && late <= first + 1.04 * interval,
+                    "跳过的刷新没有被分摊到后续帧")
+        var settled = late
+        for frame in 6...160 {
+            settled = clock.advance(toward: Double(frame) * interval, frameInterval: interval)
+        }
+        try require(abs(settled - 160 * interval) < 1e-8, "短暂延迟后播放时钟一直落后")
+    }
+    for point in curve.points {
+        let native = curve.progress(after: point.time, rate: 1)
+        try require(abs(native - point.progress) < 1e-8, "原速偏离了采样曲线")
+        if point.time >= nativeT90 {
+            let tail = curve.progress(after: point.time / 2, rate: 2)
+            try require(abs(tail - point.progress) < 1e-8, "切换的最后 10% 偏离了采样曲线")
+        }
+    }
+    for hz in [60.0, 120.0] {
+        for rate in stride(from: 1.0, through: 4.0, by: 0.125) {
+            var last = 0.0, peak = 0.0
+            for frame in 1...Int((curve.duration * hz / rate).rounded(.up)) {
+                let t = Double(frame) / hz
+                let progress = curve.progress(after: t, rate: rate)
+                try require(progress >= last && progress <= 1, "调速曲线越过落点或发生倒退")
+                peak = max(peak, progress - last)
+                last = progress
+            }
+            let averageStep = 0.9 * rate / (nativeT90 * hz)
+            if rate >= 2 {
+                try require(peak <= 1.2 * averageStep, "加速切换的峰值帧位移超过前 90% 平均值的 1.2 倍")
+            }
+            try require(abs(curve.progress(after: nativeT90 / rate, rate: rate) - 0.9) < 1e-8 &&
+                        last == 1, "平滑处理改变了 T90 或到位时间")
+        }
+    }
 
     for hz in [60.0, 120.0] {
         func timing(_ t90: Double) throws -> MotionTiming {
@@ -71,5 +171,5 @@ func runOfflineChecks() throws {
         try expectFailure { _ = try ProbeRoute(origin: origin, count: 3, requestedStep: step, chain: false) }
     }
     try expectFailure { _ = try ProbeRoute(origin: 0, count: 2, requestedStep: 1, chain: true) }
-    print("离线回归通过：到位、实测刷新周期与倍率、同屏反馈恢复、三空间起点")
+    print("离线回归通过：到位、切换帧位移、实测刷新周期与倍率、同屏反馈恢复、三空间起点")
 }

@@ -13,9 +13,11 @@ struct TailPoint {
 }
 
 /// A recording of distance travelled after lift, normalised to the distance remaining.
-/// Seeking on its time axis changes playback speed without changing the shape.
 struct TailCurve {
     let points: [TailPoint]
+    private let t90: Double
+    private let slopeAtLift: Double
+    private let slopeAt90: Double
     var duration: Double { points[points.count - 1].time }
 
     init?(_ points: [TailPoint]) {
@@ -25,7 +27,15 @@ struct TailCurve {
             guard b.time.isFinite, b.time > a.time, b.progress.isFinite,
                   (a.progress...1).contains(b.progress) else { return nil }
         }
+        guard let t10 = TailPoint.time(at: 0.1, in: points), t10 > 0,
+              let t90 = TailPoint.time(at: 0.9, in: points),
+              let t95 = TailPoint.time(at: 0.95, in: points), t95 > t90 else { return nil }
         self.points = points
+        self.t90 = t90
+        slopeAtLift = 0.1 * t90 / t10
+        // Use a short secant rather than a single (possibly repeated) position
+        // sample to estimate the landing speed in units of progress per T90.
+        slopeAt90 = min(0.9, 0.05 * t90 / (t95 - t90))
     }
 
     func progress(after elapsed: Double, rate: Double) -> Double {
@@ -33,7 +43,27 @@ struct TailCurve {
         if t <= 0 { return 0 }
         guard let i = points.firstIndex(where: { $0.time >= t }), i > 0 else { return 1 }
         let a = points[i - 1], b = points[i]
-        return a.progress + (b.progress - a.progress) * (t - a.time) / (b.time - a.time)
+        let recorded = a.progress + (b.progress - a.progress) * (t - a.time) / (b.time - a.time)
+        guard rate > 1, t < t90 else { return recorded }
+
+        // Start within the native speed range in real time, cruise, then ease into
+        // the recorded tail. The area under the velocity curve must equal 0.9.
+        let x = t / t90
+        let rise = 0.18, fall = 0.10
+        let start = min(0.9, slopeAtLift) / rate
+        let cruise = (0.9 - (rise * start + fall * slopeAt90) / 2) / (1 - (rise + fall) / 2)
+        let paced = start * x + (cruise - start) * integratedRamp(x, length: rise)
+            + (slopeAt90 - cruise) * integratedRamp(x - (1 - fall), length: fall)
+        let nativeWeight = max(0, 2 - rate)
+        return paced + nativeWeight * nativeWeight * (recorded - paced)
+    }
+
+    // Integral of a velocity transition with zero acceleration at both ends.
+    private func integratedRamp(_ time: Double, length: Double) -> Double {
+        if time <= 0 { return 0 }
+        if time >= length { return time - length / 2 }
+        let u = time / length
+        return length * u * u * u * (1 - u / 2)
     }
 
     // Normalised horizontal displacement from an original four-finger switch

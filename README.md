@@ -4,7 +4,7 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-DeskPace is a macOS menu bar app that speeds up the last part of a four-finger desktop swipe. The desktop follows your fingers as usual. Once you lift them, it glides into place at the speed you choose. The same setting applies when you switch desktops, swipe to a full-screen app, or let a partial swipe spring back.
+DeskPace is a macOS menu bar app that speeds up the last part of a four-finger desktop swipe. The desktop follows your fingers as usual. Once you lift them, it glides into place at the speed you choose. The same setting applies when you switch desktops, swipe to a full-screen app, or let a partial swipe spring back. At the outermost desktop, macOS handles the edge bounce at system speed.
 
 ## Getting started
 
