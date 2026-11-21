@@ -2,22 +2,6 @@ import AppKit
 import ApplicationServices
 import QuartzCore
 
-// Observed on physical, horizontal four-finger swipes. The CGEvent carries
-// absolute progress as a Double, a per-update delta, and two phase fields.
-enum SwipeField {
-    static let type = CGEventType(rawValue: 30)!
-    static let kind = CGEventField(rawValue: 110)!
-    static let axis = CGEventField(rawValue: 123)!
-    static let progress = CGEventField(rawValue: 124)!
-    static let deltaX = CGEventField(rawValue: 125)!
-    static let deltaY = CGEventField(rawValue: 126)!
-    static let speed = CGEventField(rawValue: 129)!
-    static let speedX = CGEventField(rawValue: 130)!
-    static let phase = CGEventField(rawValue: 132)!
-    static let companionPhase = CGEventField(rawValue: 134)!
-    static let posted: Int64 = 0x53574454
-}
-
 private struct Gesture {
     let display: SwipeDisplay
     let rate: Double
@@ -133,7 +117,7 @@ final class SwipeEngine: NSObject {
     var rate = 1.0
     var report: (String) -> Void = { _ in }
     var trace: ((String) -> Void)?
-    private var rejectedDisplay: Set<CGDirectDisplayID> = []
+    private var feedback = DisplayFeedback()
     private let spaces = NativeSpaces()
     private let payload = SwipePayload()
     private var tap: CFMachPort?
@@ -182,21 +166,25 @@ final class SwipeEngine: NSObject {
     }
 
     func interrupt(proxy: CGEventTapProxy? = nil) {
-        if let playback {
-            // If another gesture begins partway through the tail, release at
-            // the last position we sent and let the native recognizer decide.
-            let end = playback.end.copy() ?? playback.end
-            if playback.previous != playback.startProgress {
-                _ = setPosition(end, playback.previous, delta: 0, phase: UInt32(playback.kind.rawValue),
-                                orientation: playback.orientation, keepVelocity: true)
-            }
-            post(end, proxy: proxy)
-        }
-        playback = nil
+        releasePlayback(.interrupted, proxy: proxy)
         landing = nil
         gesture = nil
         link?.invalidate()
         link = nil
+    }
+
+    private enum ReleaseReason { case arrived, interrupted }
+
+    private func releasePlayback(_ reason: ReleaseReason, proxy: CGEventTapProxy? = nil) {
+        guard let playback else { return }
+        // Consume the held end before posting so later callbacks cannot release it again.
+        self.playback = nil
+        let end = playback.end
+        if reason == .arrived || playback.previous != playback.startProgress {
+            _ = payload?.update(end, phase: UInt32(playback.kind.rawValue), progress: playback.previous,
+                                delta: 0, orientation: playback.orientation, keepVelocity: reason == .interrupted)
+        }
+        post(end, proxy: proxy)
     }
 
     private func receive(_ proxy: CGEventTapProxy, _ type: CGEventType,
@@ -260,8 +248,13 @@ final class SwipeEngine: NSObject {
         case .nextSpace:
             guard progress.isFinite, velocity.isFinite, abs(progress) > 0.001,
                   let neighbor = display.neighbor(in: progress), let x = spaces?.offset(of: neighbor),
-                  display.matchesSpacePitch(abs(originX - x)), abs(x) < abs(originX - x),
-                  x * progress < 0 else { return false }
+                  display.matchesSpacePitch(abs(originX - x)), x * progress < 0 else { return false }
+            // In a rapid A → B → C switch, B can still be moving toward the
+            // center when the second swipe begins. Measure approach to C from
+            // that starting position, which can be more than one Space away.
+            let travel = originX - gesture.trackingOriginX
+            let targetAtStart = x - travel
+            guard abs(x) < abs(targetAtStart) else { return false }
             target = neighbor
             targetX = x
         case .rebound:
@@ -274,7 +267,7 @@ final class SwipeEngine: NSObject {
 
         // The terminal phase distinguishes a switch from a cancellation even
         // if the fingers paused or reversed direction before lifting.
-        if gesture.rate > 1, !rejectedDisplay.contains(display.screenID),
+        if gesture.rate > 1, feedback.canAccelerate(on: display.screenID),
            let changed = gesture.changed, let savedEnd = end.copy(),
            let orientation = payload?.orientation(of: changed, progress: changed.getDoubleValueField(SwipeField.progress)) {
             changed.location = gesture.location
@@ -302,22 +295,6 @@ final class SwipeEngine: NSObject {
         else { event.post(tap: .cghidEventTap) }
     }
 
-    private func setPosition(_ event: CGEvent, _ position: Double, delta: Double, phase: UInt32,
-                             orientation: Double, keepVelocity: Bool = false) -> Bool {
-        guard payload?.update(event, phase: phase, progress: position, delta: delta,
-                              orientation: orientation, keepVelocity: keepVelocity) == true else { return false }
-        event.setIntegerValueField(SwipeField.phase, value: Int64(phase))
-        event.setIntegerValueField(SwipeField.companionPhase, value: Int64(phase))
-        event.setDoubleValueField(SwipeField.progress, value: position)
-        event.setDoubleValueField(SwipeField.deltaX, value: delta)
-        event.setDoubleValueField(SwipeField.deltaY, value: 0)
-        if !keepVelocity {
-            event.setDoubleValueField(SwipeField.speed, value: 0)
-            event.setDoubleValueField(SwipeField.speedX, value: 0)
-        }
-        return true
-    }
-
     @objc private func frame(_ sender: CADisplayLink) {
         guard let run = landing, let position = spaces?.offset(of: run.target) else {
             interrupt()
@@ -334,13 +311,16 @@ final class SwipeEngine: NSObject {
             case .wait:
                 break
             case .unresponsive:
-                if measured < 0.04 { rejectedDisplay.insert(run.display.screenID) }
+                if measured < 0.04 {
+                    feedback.missedFeedback(on: run.display.screenID)
+                }
                 interrupt()
                 report("未收到桌面位移反馈，本次由系统收尾")
                 return
             case let .move(progress):
                 guard let next = playback.changed.copy(),
-                      setPosition(next, progress, delta: progress - playback.previous, phase: 2, orientation: playback.orientation) else {
+                      payload?.update(next, phase: 2, progress: progress, delta: progress - playback.previous,
+                                      orientation: playback.orientation) == true else {
                     interrupt()
                     report("当前系统未接受手势调速")
                     return
@@ -348,13 +328,7 @@ final class SwipeEngine: NSObject {
                 post(next)
                 playback.previous = progress
             case .finish:
-                let end = playback.end.copy() ?? playback.end
-                if setPosition(end, playback.previous, delta: 0, phase: UInt32(playback.kind.rawValue), orientation: playback.orientation) {
-                    post(end)
-                } else {
-                    post(playback.end)
-                }
-                self.playback = nil
+                releasePlayback(.arrived)
             }
         }
 
@@ -386,6 +360,12 @@ final class SwipeEngine: NSObject {
 
     private func finish(_ run: Landing) {
         guard let settled = run.settledAt else { return }
+        let id = run.display.screenID
+        if run.rate > 1 {
+            feedback.confirmedPlayback(on: id)
+        } else if run.samples.contains(where: { $0.progress > 0 && $0.progress < 1 }) {
+            feedback.confirmedNativeLanding(on: id)
+        }
         if run.rate == 1, settled > 0.10, settled < 1.6 {
             let points = run.samples.filter { $0.time < settled && $0.progress < 1 }
             if let curve = TailCurve(points + [TailPoint(time: settled, progress: 1)]) {

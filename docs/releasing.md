@@ -12,7 +12,7 @@ git config --local switchdesktop.signingIdentity '替换为证书指纹'
 ./build.sh
 ```
 
-退出旧进程，打开 `build/DeskPace.app` 并授权。若系统显示旧条目已开启，但面板仍提示等待授权，在系统隐私设置里移除 DeskPace 的旧条目，再添加刚构建的 App。此后用同一身份构建，以便 macOS 继续识别它。更换签名团队或证书类型时需要重新验证授权。[Apple 代码签名身份说明](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements)
+临时签名的 App 重新构建后，macOS 可能要求重新授予辅助功能权限。退出旧进程，打开 `build/DeskPace.app` 并授权。若系统显示旧条目已开启，但面板仍提示等待授权，在系统隐私设置里移除 DeskPace 的旧条目，再添加刚构建的 App。此后用同一身份构建，以便 macOS 继续识别它。更换签名团队或证书类型时需要重新验证授权。[Apple 代码签名身份说明](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements)
 
 构建脚本优先使用环境变量 `CODE_SIGN_IDENTITY`，其次读取上述 Git 配置；两者均未指定时使用临时签名。如果已有产物使用固定签名，脚本会阻止因遗漏身份配置而用临时签名覆盖它。指定的签名身份不可用时，构建失败，原产物保留。
 
@@ -30,6 +30,12 @@ git config --local switchdesktop.signingIdentity '替换为证书指纹'
 ## 发布到 GitHub Releases
 
 在 `wawaRou/deskpace` 为构建所用提交创建 Release 草稿，标签使用 `v<版本号>`。上传两份附件，核对版本、文件名和大小后发布为正式 Release，并设为 **Latest**。仅推送 Git 标签不会更新 App 使用的清单。
+
+当前公开版本使用临时签名。下一版 Release 的安装说明沿用以下文字，并与中英文 README 保持一致：
+
+> 当前下载包使用临时签名，未经 Apple 公证。macOS 可能阻止 App 首次打开。应用内更新由 Sparkle 验证签名。
+
+取得 Developer ID Application 证书后，再切换公开版的代码签名身份。届时从最终 ZIP 解压测试首次安装，并从上一公开版本测试更新、倍率设置和辅助功能授权；根据实测结果同步更新安装说明。
 
 App 固定读取 [Latest Release 的 appcast.xml](https://github.com/wawaRou/deskpace/releases/latest/download/appcast.xml)。这个地址随 Latest 移动，清单里的 ZIP 地址则始终指向生成清单时的标签。可在有仓库权限的环境用下面的只读命令核对 GitHub 当前返回的 Latest 与附件：
 

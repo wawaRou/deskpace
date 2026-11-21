@@ -1,0 +1,19 @@
+name: Verify DeskPace
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Run offline motion regressions
+        run: ./Tests/verify-motion.sh --offline
+      - name: Build and verify the universal app
+        run: ./build.sh

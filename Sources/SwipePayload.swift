@@ -2,6 +2,22 @@ import CoreGraphics
 import Darwin
 import Foundation
 
+// Observed on physical, horizontal four-finger swipes. The CGEvent carries
+// absolute progress as a Double, a per-update delta, and two phase fields.
+enum SwipeField {
+    static let type = CGEventType(rawValue: 30)!
+    static let kind = CGEventField(rawValue: 110)!
+    static let axis = CGEventField(rawValue: 123)!
+    static let progress = CGEventField(rawValue: 124)!
+    static let deltaX = CGEventField(rawValue: 125)!
+    static let deltaY = CGEventField(rawValue: 126)!
+    static let speed = CGEventField(rawValue: 129)!
+    static let speedX = CGEventField(rawValue: 130)!
+    static let phase = CGEventField(rawValue: 132)!
+    static let companionPhase = CGEventField(rawValue: 134)!
+    static let posted: Int64 = 0x53574454
+}
+
 /// Keep the Quartz event and its attached trackpad swipe in agreement.
 /// Natural scrolling can give the two coordinate systems opposite signs.
 final class SwipePayload {
@@ -58,7 +74,7 @@ final class SwipePayload {
     }
 
     func update(_ event: CGEvent, phase: UInt32, progress: Double, delta: Double,
-                orientation: Double, keepVelocity: Bool) -> Bool {
+                orientation: Double, keepVelocity: Bool = false) -> Bool {
         guard let source = read(event)?.takeRetainedValue(), kind(source) == 23,
               let copy = clone(nil, source)?.takeRetainedValue() else { return false }
         let dockSwipe: UInt32 = 23 << 16
@@ -73,6 +89,15 @@ final class SwipePayload {
             setFloat(velocity, velocityX + 1, 0)
         }
         attach(event, copy)
+        event.setIntegerValueField(SwipeField.phase, value: Int64(phase))
+        event.setIntegerValueField(SwipeField.companionPhase, value: Int64(phase))
+        event.setDoubleValueField(SwipeField.progress, value: progress)
+        event.setDoubleValueField(SwipeField.deltaX, value: delta)
+        event.setDoubleValueField(SwipeField.deltaY, value: 0)
+        if !keepVelocity {
+            event.setDoubleValueField(SwipeField.speed, value: 0)
+            event.setDoubleValueField(SwipeField.speedX, value: 0)
+        }
         return true
     }
 }

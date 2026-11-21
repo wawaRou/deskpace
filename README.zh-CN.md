@@ -10,9 +10,13 @@ DeskPace 是一款 macOS 菜单栏工具，让你调快四指切换桌面时松�
 
 需要 macOS 26 或更高版本，以及已启用四指切换桌面手势的触控板。已在 macOS 27 内建屏上实测。[兼容性与实测结果](docs/motion-verification.md)
 
+当前下载包使用临时签名，未经 Apple 公证。macOS 可能阻止 App 首次打开。
+
 1. 从 [GitHub Releases](https://github.com/wawaRou/deskpace/releases/latest) 下载 `DeskPace-<版本号>.zip`，解压后将 `DeskPace.app` 拖入「应用程序」并打开。
 2. 点击菜单栏里的 DeskPace 图标，选择「授权辅助功能…」，在系统设置中允许 DeskPace 调节手势。
 3. 将滑块从 **1×（系统原速）** 调到想要的速度，最高 **4×**。下一次四指横移就会采用新倍率，设置会自动保存。
+
+如果收尾时读不到可靠的桌面位移，DeskPace 会交由系统按原速收尾。同一显示器恢复正常、能观测到原速手势到位后，DeskPace 会自动重试所选倍率。
 
 安装后，可在菜单栏面板点「检查更新…」获取新版。
 
@@ -25,4 +29,4 @@ DeskPace 是一款 macOS 菜单栏工具，让你调快四指切换桌面时松�
 open build/DeskPace.app
 ```
 
-[更新时保留授权](docs/releasing.md#本地构建与辅助功能授权) · [反馈问题](https://github.com/wawaRou/deskpace/issues) · [MIT 许可证](LICENSE)
+[更新时保留授权](docs/releasing.md#本地构建与辅助功能授权) · [反馈问题](https://github.com/wawaRou/deskpace/issues) · [参与开发](CONTRIBUTING.md) · [MIT 许可证](LICENSE)
