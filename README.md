@@ -2,20 +2,23 @@
 
 # DeskPace
 
-**English** · [简体中文](README.zh-CN.md)
+English · [简体中文](README.zh-CN.md)
 
-DeskPace is a macOS menu bar app that speeds up the last part of a four-finger desktop swipe. The desktop follows your fingers as usual. Once you lift them, it glides into place at the speed you choose. The same setting applies when you switch desktops, swipe to a full-screen app, or let a partial swipe spring back. At the outermost desktop, macOS handles the edge bounce at system speed.
+DeskPace is a macOS menu bar app for four-finger desktop swipes. The desktop follows your fingers as usual. When you lift them, you can have the animation finish up to four times faster. The setting also applies when you swipe to a full-screen app or let a partial swipe return to the starting desktop.
 
-## Getting started
+## Install
 
-Requires macOS 26 or later and a trackpad configured to switch desktops with four fingers. DeskPace has been tested on macOS 27 with a built-in display. [Compatibility and test results (in Chinese)](docs/motion-results.md)
+You need macOS 26 or later and a trackpad with four-finger desktop switching enabled. For tested macOS versions and displays, see the [test results (in Chinese)](docs/motion-results.md).
 
-The current download uses an ad hoc signature and has not been notarized by Apple. macOS may block the app on first launch.
+1. Download `DeskPace-<version>.zip`, unzip it, and drag `DeskPace.app` into Applications. [GitHub Releases](https://github.com/wawaRou/deskpace/releases/latest)
+2. Open DeskPace and click its menu bar icon. If prompted, click **授权辅助功能…** (Grant Accessibility Access) and enable DeskPace under **Privacy & Security → Accessibility** in System Settings.
 
-1. Download `DeskPace-<version>.zip` from [GitHub Releases](https://github.com/wawaRou/deskpace/releases/latest). Unzip it, drag `DeskPace.app` into Applications, and open it.
-2. Click the DeskPace menu bar icon, choose **授权辅助功能…** (Grant Accessibility Access), and allow DeskPace in System Settings.
-3. Set the slider anywhere from **1×** (system speed) to **4×**. Your next swipe uses the new speed, and DeskPace remembers your setting.
+The v0.1.6 download uses an ad hoc signature. Apple has not notarized it, so macOS may block the first launch.
 
-To update, choose **检查更新…** (Check for Updates) in the menu bar panel.
+## Set the speed
 
-[Report an issue](https://github.com/wawaRou/deskpace/issues) · [Build and contribute (in Chinese)](CONTRIBUTING.md) · [MIT License](LICENSE)
+Move the slider between 1× (system speed) and 4×. The next swipe uses your setting. DeskPace remembers it when you quit.
+
+Click **恢复原速** to return to system speed or **检查更新…** to check for an update.
+
+[Report an issue](https://github.com/wawaRou/deskpace/issues) · [Build and contribute (in Chinese)](CONTRIBUTING.md) · [MIT license](LICENSE)
