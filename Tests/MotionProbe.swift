@@ -137,7 +137,7 @@ private final class HandoffProbe {
                 let probe = Unmanaged<HandoffProbe>.fromOpaque(pointer).takeUnretainedValue()
                 let phase = event.getIntegerValueField(SwipeField.phase)
                 if let goal = probe.goal {
-                    if phase == 4 { probe.remaining = probe.spaces.offset(of: goal).map(abs) }
+                    if phase == 4 || phase == 8 { probe.remaining = probe.spaces.offset(of: goal).map(abs) }
                     if phase == 2, let threshold = probe.skipBelowGap, let x = probe.spaces.offset(of: goal),
                        abs(x) <= threshold {
                         probe.skipBelowGap = nil
@@ -196,28 +196,29 @@ private final class MotionProbe {
         self.sign = sign; self.neighbor = neighbor
     }
 
-    func swipe(_ direction: Double, end: Double) {
+    func swipe(_ direction: Double, end: Double, interval: Double = 0.0085, hold: Double = 0.025) {
         var previous = direction * 0.005
         input.send(at: point, phase: 1, progress: previous, delta: previous)
         for i in 1...15 {
-            pump(for: 0.0085)
+            pump(for: interval)
             let p = direction * end * Double(i) / 15
             input.send(at: point, phase: 2, progress: p, delta: p - previous)
             previous = p
         }
-        pump(for: 0.025)
+        pump(for: hold)
     }
 
     func leg(_ direction: Double, to goal: UInt64, rate: Double, clicks: ClickProbe?,
-             skipOneUpdate: Bool = false) throws -> Result {
+             skipOneUpdate: Bool = false, releaseSpeed: Double = 3.2) throws -> Result {
         engine.rate = rate
         let p = 0.22
-        swipe(direction, end: p)
+        let slow = releaseSpeed <= 1
+        swipe(direction, end: p, interval: slow ? 0.020 : 0.0085, hold: releaseSpeed == 0 ? 0.18 : 0.025)
         let initial = abs(spaces.offset(of: goal) ?? 0)
         handoff.watch(goal, skipBelowGap: skipOneUpdate ? initial * 0.13 : nil)
         let start = CACurrentMediaTime()
-        input.send(at: point, phase: 4, progress: p * direction, delta: direction * p / 15,
-                   velocity: direction * 3.2)
+        input.send(at: point, phase: 4, progress: p * direction, delta: releaseSpeed == 0 ? 0 : direction * p / 15,
+                   velocity: direction * releaseSpeed)
         guard initial > 20 else { throw Failure("无法测量松手位置") }
         var points = [TailPoint(time: 0, progress: 0)]
         var current: Double?, last = initial, reversal = 0.0
@@ -242,7 +243,9 @@ private final class MotionProbe {
         }
         if rate > 1 {
             if skipOneUpdate, !handoff.skippedUpdate { throw Failure("未能模拟收尾期间丢失一帧") }
-            guard let remaining = handoff.remaining else { throw Failure("缺少调速手势的结束事件") }
+            guard let remaining = handoff.remaining else {
+                throw Failure("松手速度 \(releaseSpeed)，设为 \(rate)× 时未接管收尾，T90 为 \(Int(t90 * 1000)) 毫秒")
+            }
             guard remaining <= 2 else {
                 throw Failure("结束手势时距目标还有 \(Int(remaining.rounded())) 点，桌面会再次减速到位")
             }
@@ -288,9 +291,21 @@ private final class MotionProbe {
                 }
             } else { baseline = result }
         }
+        var nativeSlow: [Result] = []
+        for rate in [1.0, 3.0] {
+            let slow = try leg(sign, to: neighbor, rate: rate, clicks: nil, releaseSpeed: 0.76)
+            let held = try leg(-sign, to: home, rate: rate, clicks: nil, releaseSpeed: 0)
+            print("\(rate)× 慢划 T90 \(Int(slow.t90 * 1000)) ms，停住再松手 \(Int(held.t90 * 1000)) ms")
+            if rate == 1 { nativeSlow = [slow, held] }
+            else {
+                for (result, native) in zip([slow, held], nativeSlow) {
+                    guard result.t90 <= native.t90 * 1.25 / rate + 0.012 else { throw Failure("慢划收尾仍为原速") }
+                }
+            }
+        }
         let nativeRebound = try rebound(rate: 1)
         let selectedRebound = try rebound(rate: 4)
-        guard abs(nativeRebound - selectedRebound) < 0.045 else { throw Failure("回弹速度偏离了系统原速") }
+        guard selectedRebound <= nativeRebound * 1.25 / 4 + 0.012 else { throw Failure("回弹仍为系统原速") }
         print("取消回弹 T90 \(Int(nativeRebound * 1000)) / \(Int(selectedRebound * 1000)) ms，已回到起始桌面")
     }
 
@@ -298,6 +313,7 @@ private final class MotionProbe {
         engine.rate = rate
         swipe(sign, end: 0.22)
         let initial = abs(spaces.offset(of: home) ?? 0)
+        handoff.watch(home, skipBelowGap: nil)
         let start = CACurrentMediaTime()
         input.send(at: point, phase: 8, progress: sign * 0.22, delta: 0)
         var points = [TailPoint(time: 0, progress: 0)]
@@ -308,6 +324,9 @@ private final class MotionProbe {
         }
         guard initial > 20, spaces.isCurrent(home, on: display), abs(spaces.offset(of: home) ?? 100) < 2,
               let time = TailPoint.time(at: 0.9, in: points) else { throw Failure("取消手势未回到起始桌面") }
+        if rate > 1, (handoff.remaining ?? .infinity) > 2 {
+            throw Failure("取消事件未在原桌面到位后送出，回弹 T90 为 \(Int(time * 1000)) 毫秒")
+        }
         return time
     }
 }

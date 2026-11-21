@@ -131,10 +131,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func togglePanel() {
         if popover.isShown { popover.performClose(nil) }
-        else if let button = item?.button {
+        else if let button = item?.button, let controller = popover.contentViewController {
             model.refreshAccess()
+            // AppKit anchors the popover using its size at presentation time.
+            controller.view.layoutSubtreeIfNeeded()
+            popover.contentSize = controller.view.fittingSize
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
+            controller.view.window?.makeKey()
         }
     }
 
