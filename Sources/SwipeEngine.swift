@@ -22,6 +22,7 @@ private struct Gesture {
     let display: SwipeDisplay
     let rate: Double
     let location: CGPoint
+    let trackingOriginX: Double
     var changed: CGEvent?
 }
 
@@ -61,7 +62,7 @@ private final class Playback {
 
     private struct Pending {
         let issued: Double
-        let travelBefore: Double
+        let targetBefore: Double
         let expectedStep: Double
     }
 
@@ -71,27 +72,25 @@ private final class Playback {
     let startProgress: Double
     let orientation: Double
     let curve: TailCurve
-    private let direction: Double
-    private let pitch: Double
-    private let initialGap: Double
+    private let targetAtLift: Double
     private var pointsPerUnit: Double
     private var pending: Pending?
     var previous: Double
 
-    init?(kind: LandingKind, changed: CGEvent, end: CGEvent, originX: Double, targetX: Double, orientation: Double, curve: TailCurve) {
+    init?(kind: LandingKind, changed: CGEvent, end: CGEvent, trackingOriginX: Double,
+          originX: Double, targetX: Double, orientation: Double, curve: TailCurve) {
         // The end event has not been forwarded. The on-screen position belongs
         // to a changed event, even when the lift carries another trackpad delta.
         let progress = changed.getDoubleValueField(SwipeField.progress)
-        guard progress.isFinite, abs(progress) > 0.001, originX * progress > 0,
-              kind == .rebound || targetX * progress < 0, abs(originX) > 2 else { return nil }
+        let tracked = originX - trackingOriginX
+        guard progress.isFinite, abs(progress) > 0.001, tracked * progress > 0,
+              kind == .rebound || targetX * progress < 0, abs(tracked) > 2 else { return nil }
         self.kind = kind
         self.changed = changed
         self.end = end
         self.startProgress = progress
-        direction = progress > 0 ? 1 : -1
-        pitch = abs(originX - targetX)
-        initialGap = abs(targetX)
-        pointsPerUnit = abs(originX / progress)
+        targetAtLift = targetX
+        pointsPerUnit = abs(tracked / progress)
         self.orientation = orientation
         self.previous = progress
         self.curve = curve
@@ -100,17 +99,18 @@ private final class Playback {
     /// Match compositor feedback to one outstanding tracking position. Both the
     /// conversion and the decision to release depend on the real Space transform.
     func step(targetX: Double, fraction: Double, elapsed: Double, frameInterval: Double) -> Step {
-        let returning = kind == .rebound
-        let remaining = (returning ? direction : -direction) * targetX
-        // Travel is an absolute distance from the starting desktop. It falls
-        // toward zero on a rebound and rises toward the pitch on a switch.
-        let travel = returning ? remaining : pitch - remaining
-        if abs(remaining) <= 1 { return .finish }
+        if abs(targetX) <= 1 { return .finish }
         if let pending {
-            let displacement = travel - pending.travelBefore
-            if displacement * pending.expectedStep > 0, abs(displacement) >= 0.75, travel > 0, previous != 0 {
-                pointsPerUnit = travel / abs(previous)
-            } else if abs(pending.expectedStep) > 1.5, abs(remaining) > 1 {
+            let displacement = targetX - pending.targetBefore
+            if displacement * pending.expectedStep > 0, abs(displacement) >= 0.75 {
+                // Measure from lift onward. A second gesture can begin while its
+                // starting desktop is still moving underneath it.
+                let units = previous - startProgress
+                let travel = targetX - targetAtLift
+                if abs(travel) >= 4, travel * units > 0, abs(units) > 0.001 {
+                    pointsPerUnit = travel / units
+                }
+            } else if abs(pending.expectedStep) > 1.5 {
                 if elapsed - pending.issued > max(0.085, frameInterval * 4) { return .unresponsive }
                 // An update can be dropped or coalesced. Repeat the absolute
                 // position with zero delta until the compositor acknowledges it.
@@ -118,21 +118,14 @@ private final class Playback {
             }
             self.pending = nil
         }
-        let amount: Double
-        let desiredGap = initialGap * (1 - fraction)
-        if returning {
-            amount = min(abs(previous), desiredGap / pointsPerUnit)
-        } else if fraction >= 1 || remaining < 0 {
-            amount = abs(previous) + remaining / pointsPerUnit
-        } else {
-            // A slightly late initial sample can put us ahead of the curve.
-            amount = max(abs(previous), (pitch - desiredGap) / pointsPerUnit)
-        }
-        guard amount.isFinite, amount >= 0 else { return .unresponsive }
-        let step = (amount - abs(previous)) * pointsPerUnit
+        let step = targetAtLift * (1 - fraction) - targetX
+        // Wait when the compositor is already ahead of this frame on the curve.
+        if targetX * targetAtLift > 0, step * targetX > 0 { return .wait }
         guard abs(step) >= 0.5 else { return .wait }
-        pending = Pending(issued: elapsed, travelBefore: travel, expectedStep: step)
-        return .move(amount * direction)
+        let progress = previous + step / pointsPerUnit
+        guard progress.isFinite else { return .unresponsive }
+        pending = Pending(issued: elapsed, targetBefore: targetX, expectedStep: step)
+        return .move(progress)
     }
 }
 
@@ -220,9 +213,22 @@ final class SwipeEngine: NSObject {
               event.getIntegerValueField(SwipeField.axis) == 1 else { return unchanged }
         switch event.getIntegerValueField(SwipeField.phase) {
         case 1:
+            let preceding = landing
             interrupt(proxy: proxy)
-            if let display = spaces?.display(at: event.location) {
-                gesture = Gesture(display: display, rate: rate, location: event.location)
+            if var display = spaces?.display(at: event.location) {
+                var trackingOriginX = 0.0
+                // Current Space can still name the old desktop when the next
+                // physical gesture already tracks from the preceding destination.
+                if let preceding, preceding.display.screenID == display.screenID,
+                   preceding.display.identifier == display.identifier,
+                   preceding.display.spaces == display.spaces,
+                   let index = display.spaces.firstIndex(of: preceding.target),
+                   display.origin == preceding.display.origin || display.origin == index,
+                   let offset = spaces?.offset(of: preceding.target) {
+                    display.origin = index
+                    trackingOriginX = offset
+                }
+                gesture = Gesture(display: display, rate: rate, location: event.location, trackingOriginX: trackingOriginX)
             }
         case 2:
             gesture?.changed = event.copy()
@@ -273,7 +279,8 @@ final class SwipeEngine: NSObject {
            let orientation = payload?.orientation(of: changed, progress: changed.getDoubleValueField(SwipeField.progress)) {
             changed.location = gesture.location
             savedEnd.location = gesture.location
-            playback = Playback(kind: kind, changed: changed, end: savedEnd, originX: originX, targetX: targetX,
+            playback = Playback(kind: kind, changed: changed, end: savedEnd,
+                                trackingOriginX: gesture.trackingOriginX, originX: originX, targetX: targetX,
                                 orientation: orientation, curve: curves[kind]?[display.screenID] ?? .reference)
         }
         let run = Landing(kind: kind, display: display, target: target, gap: gap, pitch: pitch,

@@ -235,7 +235,10 @@ private final class MotionProbe {
                 nextCurrentCheck = t + 0.008
             }
             clicks?.tryClick()
-            if let current, t - current > 0.035, clicks == nil || clicks?.target.received != nil { break }
+            // During a rapid return the system may still list the starting
+            // desktop as current for both legs. Wait for the actual landing.
+            if let current, t - current > 0.035, distance <= 2,
+               rate == 1 || handoff.remaining != nil, clicks == nil || clicks?.target.received != nil { break }
         }
         guard let t90 = TailPoint.time(at: 0.9, in: points), let current,
               spaces.isCurrent(goal, on: display), reversal < max(5, initial * 0.012) else {
@@ -307,6 +310,25 @@ private final class MotionProbe {
         let selectedRebound = try rebound(rate: 4)
         guard selectedRebound <= nativeRebound * 1.25 / 4 + 0.012 else { throw Failure("回弹仍为系统原速") }
         print("取消回弹 T90 \(Int(nativeRebound * 1000)) / \(Int(selectedRebound * 1000)) ms，已回到起始桌面")
+        guard let baseline else { throw Failure("缺少原速切换基准") }
+        try rapidReturn(native: baseline)
+    }
+
+    func rapidReturn(native: Result) throws {
+        engine.rate = 3
+        swipe(sign, end: 0.22)
+        let gap = abs(spaces.offset(of: neighbor) ?? 0)
+        let start = CACurrentMediaTime()
+        input.send(at: point, phase: 4, progress: sign * 0.22, delta: sign * 0.01, velocity: sign * 3.2)
+        // Start the reverse swipe as the first lands, before Current Space changes.
+        while abs(spaces.offset(of: neighbor) ?? gap) > gap * 0.12, CACurrentMediaTime() - start < 0.5 {
+            pump(for: 0.004)
+        }
+        guard gap > 20, abs(spaces.offset(of: neighbor) ?? gap) <= gap * 0.12,
+              spaces.isCurrent(home, on: display) else { throw Failure("未覆盖两次手势重叠的时段") }
+        let result = try leg(-sign, to: home, rate: 3, clicks: nil)
+        guard result.t90 <= native.t90 * 1.25 / 3 + 0.012 else { throw Failure("立即回切仍为原速") }
+        print("连续往返 3×，回程 T90 \(Int(result.t90 * 1000)) ms，已回到起始桌面")
     }
 
     func rebound(rate: Double) throws -> Double {

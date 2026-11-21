@@ -2,14 +2,14 @@ import AppKit
 import CoreGraphics
 import Darwin
 
-/// A snapshot at gesture begin. Space order includes full-screen applications.
+/// The display and tracking origin for a gesture. Space order includes full-screen applications.
 struct SwipeDisplay {
     let screen: NSScreen
     let identifier: String
     let screenID: CGDirectDisplayID
     let spaces: [UInt64]
     let fullScreenSpaces: Set<UInt64>
-    let origin: Int
+    var origin: Int
 
     func neighbor(in direction: Double) -> UInt64? {
         let next = origin + (direction > 0 ? 1 : -1)
